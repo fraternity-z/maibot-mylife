@@ -34,7 +34,6 @@
     "api.call",
     "maisaka.proactive.trigger",
     "config.get",
-    "component.list_loaded_plugins",
     "web.search",
     "web.fetch"
   ],

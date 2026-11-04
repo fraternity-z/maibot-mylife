@@ -917,9 +917,9 @@
         <div class="ml-kpi-sub" id="kpi-llm-health">模型健康：—</div>
       </div>
       <div class="ml-kpi-tile">
-        <div class="ml-kpi-label">麦麦绘图联动 &amp; 群观察</div>
-        <div class="ml-kpi-value" id="kpi-drawpic">—</div>
-        <div class="ml-kpi-sub" id="kpi-groups-obs">活跃群 — · 观察记录 —</div>
+        <div class="ml-kpi-label">群观察</div>
+        <div class="ml-kpi-value" id="kpi-groups-active">—</div>
+        <div class="ml-kpi-sub" id="kpi-groups-obs">观察记录 — · 待写灵感 —</div>
       </div>
     </div>
 
@@ -1146,7 +1146,6 @@
     const sl = d.sleep || {};
     const sc = d.schedule || {};
     const sv = d.services || {};
-    const lk = d.linkage || {};
 
     document.getElementById('hdr-version').textContent = `v${d.version || '—'}`;
     document.getElementById('hdr-generated').textContent = `采样于 ${(d.generated_at || '').replace('T', ' ')}`;
@@ -1236,12 +1235,9 @@
     document.getElementById('kpi-llm-health').style.color = llmOk ? 'var(--ml-muted)' : 'var(--status-crit)';
     document.getElementById('avail-tasks-text').textContent = `可用模型任务：${sv.available_tasks || '无'}`;
 
-    const drawStatus = lk.drawpic_enabled
-      ? (lk.drawpic_detected ? '已启用·已连接' : '已启用·未探测到插件')
-      : '已关闭';
-    document.getElementById('kpi-drawpic').textContent = drawStatus;
+    document.getElementById('kpi-groups-active').textContent = `${sv.active_groups ?? 0} 个活跃群`;
     document.getElementById('kpi-groups-obs').textContent =
-      `活跃群 ${sv.active_groups ?? 0} · 群观察 ${sv.group_observations ?? 0} · 待写灵感 ${sv.pending_inspirations ?? 0}`;
+      `群观察 ${sv.group_observations ?? 0} · 待写灵感 ${sv.pending_inspirations ?? 0}`;
   }
 
   // Render 72h Status History (Two separate single-axis SVG plots + sleep bands + crosshair + table)

@@ -1072,24 +1072,6 @@ class ProactiveSettings(PluginConfigBase):
     )
 
 
-class LinkageSettings(PluginConfigBase):
-    """与其它插件的联动开关；目标插件未安装时开关不生效。"""
-
-    __ui_label__: ClassVar[str] = "插件联动"
-    __ui_order__: ClassVar[int] = 15
-
-    drawpic_enabled: bool = Field(
-        default=False,
-        description="启用麦麦绘图联动：聊天中麦麦想分享日常生活画面时，可调用麦麦绘图插件（maimai-drawpic-plugin）的工具生成并发送。",
-        json_schema_extra=_ui(
-            "启用麦麦绘图联动",
-            "默认关闭；需已安装麦麦绘图插件。检测仅确认插件已加载（不校验其版本与绘图平台 Key），注入时另需 draw 工具对当前对话可见，否则不生效。",
-            0, label_en="Drawpic Linkage",
-            hint_en="Off by default; requires the maimai-drawpic-plugin installed. Detection confirms the plugin is loaded only (no version or platform-key check); injection also requires the draw tool to be visible in the current chat.",
-        ),
-    )
-
-
 class MaiLifeSettings(PluginConfigBase):
     """麦日常完整配置。"""
 
@@ -1156,10 +1138,6 @@ class MaiLifeSettings(PluginConfigBase):
     usage: UsageSettings = Field(
         default_factory=UsageSettings,
         json_schema_extra=_ui("Token 监控", "调用次数、Token、耗时和失败统计。", 14, label_en="Token Monitoring", hint_en="Calls, tokens, latency and failure statistics."),
-    )
-    linkage: LinkageSettings = Field(
-        default_factory=LinkageSettings,
-        json_schema_extra=_ui("插件联动", "与其它插件的协作开关；目标插件未安装时不生效。", 15, label_en="Plugin Linkage", hint_en="Collaboration switches; ineffective when the target plugin is absent."),
     )
 
     @model_validator(mode="before")

@@ -475,7 +475,7 @@
   <section class="ml-card" id="sec-config">
     <div class="ml-card-header">
       <h2 class="ml-card-title">全量只读配置透视 (13 个配置节)</h2>
-      <input type="search" class="ml-input" id="cfg-search-input" placeholder="搜索配置节或参数名（如 gate_mode / drawpic / 阈值）…"/>
+      <input type="search" class="ml-input" id="cfg-search-input" placeholder="搜索配置节或参数名（如 gate_mode / prompt_max_chars / 阈值）…"/>
     </div>
     <div class="ml-cfg-grid" id="cfg-cards-grid">
       <div class="ml-empty">正在读取配置摘要…</div>
@@ -497,7 +497,6 @@
     users: { title: '用户档案统计 (users)', badge: '社交' },
     models: { title: '模型任务路由 (models)', badge: 'LLM' },
     environment: { title: '环境与天气 (environment)', badge: '感知' },
-    linkage: { title: '外部插件联动 (linkage)', badge: '联动' },
     context: { title: '上下文注入与连续性 (context)', badge: '管线' },
     rest_gate: { title: '私聊休息闸门 (rest_gate)', badge: '守门' },
     group: { title: '群聊观察与闸门 (group)', badge: '群聊' },
@@ -519,8 +518,6 @@
     timezone: '配置时区',
     city: '天气城市',
     weather_refresh_minutes: '天气刷新间隔(分)',
-    drawpic_enabled: '麦麦绘图联动开关',
-    drawpic_detected: 'drawpic 插件已探测',
     continuity_enabled: '未完话题连续性',
     continuity_interval_minutes: '连续性刷新间隔(分)',
     prompt_max_chars: '注入背景最大字符',
@@ -732,11 +729,8 @@
     // 1. Render Pitfall & Coupling Diagnostic Callouts
     const rg = cfg.rest_gate || {};
     const gp = cfg.group || {};
-    const lk = cfg.linkage || {};
-    const cx = cfg.context || {};
 
     const isScheduleGate = rg.gate_mode === 'schedule';
-    const drawCoupledWarn = lk.drawpic_enabled === '开启' && cx.enabled !== '开启';
 
     document.getElementById('diag-callouts').innerHTML = `
       <div class="ml-diag-card ${isScheduleGate ? 'warn' : ''}">
@@ -748,18 +742,6 @@
           ${isScheduleGate
             ? '当前私聊闸门为 <code>schedule</code> 模式：只要日程段命中休息类型即生效拦截，<strong>配置的夜窗/午休时间窗 (' + esc(rg.night_window) + ') 将被忽略</strong>。'
             : '当前私聊闸门为 <code>time_window</code> 模式：严格按夜窗 (' + esc(rg.night_window) + ') 与午休窗 (' + esc(rg.nap_window) + ') 判定。'}
-        </div>
-      </div>
-
-      <div class="ml-diag-card ${drawCoupledWarn ? 'warn' : ''}">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <strong style="font-size:13.5px;">麦麦绘图 (drawpic) 联动耦合自检</strong>
-          <span class="ml-badge ${drawCoupledWarn ? 'ml-badge-warn' : 'ml-badge-good'}">联动: ${esc(lk.drawpic_enabled)} · 探测: ${esc(lk.drawpic_detected)}</span>
-        </div>
-        <div style="font-size:12px;color:var(--ml-muted);line-height:1.5;">
-          ${drawCoupledWarn
-            ? '⚠️ <code>linkage.drawpic_enabled</code> 已开启，但 <code>context.enabled</code> 为关闭！引导注入依赖上下文 payload，当前联动将静默失效。'
-            : '上下文注入状态：<strong>' + esc(cx.enabled) + '</strong>。当私聊出现拍照/生活分享信号且本轮工具含 <code>draw</code> 时自动注入引导。'}
         </div>
       </div>
     `;
