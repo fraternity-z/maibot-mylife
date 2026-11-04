@@ -1,0 +1,101 @@
+{
+  "schema_version": 2,
+  "required_capabilities": [
+    "custom_pages"
+  ],
+  "workspace_title": "麦生活",
+  "pages": [
+    {
+      "id": "overview",
+      "title": "麦麦此刻",
+      "description": "实时生活状态、情绪罗盘、72h 轨迹、今日日程与 Token 监控",
+      "placement": "workspace",
+      "icon": "chart",
+      "mode": "custom",
+      "entry": "webui/overview.html",
+      "layout": "document",
+      "queries": {
+        "status": {
+          "api": "webui_status_overview",
+          "version": "1"
+        },
+        "history": {
+          "api": "webui_status_history",
+          "version": "1"
+        },
+        "schedule": {
+          "api": "webui_schedule",
+          "version": "1"
+        },
+        "usage": {
+          "api": "webui_usage",
+          "version": "1"
+        }
+      }
+    },
+    {
+      "id": "life",
+      "title": "记忆与牵挂",
+      "description": "社交关系温度、重要日期、日记与梦境手账、书柜作品与联网见闻",
+      "placement": "sidebar",
+      "icon": "puzzle",
+      "mode": "custom",
+      "entry": "webui/life.html",
+      "layout": "document",
+      "queries": {
+        "users": {
+          "api": "webui_users",
+          "version": "1"
+        },
+        "dates": {
+          "api": "webui_dates",
+          "version": "1"
+        },
+        "memories": {
+          "api": "webui_memories",
+          "version": "1"
+        },
+        "shelf": {
+          "api": "webui_bookshelf_overview",
+          "version": "1"
+        },
+        "digest": {
+          "api": "webui_information_digest",
+          "version": "1"
+        }
+      }
+    },
+    {
+      "id": "system",
+      "title": "系统与配置",
+      "description": "运行健康诊断、主动私聊候选与跳过统计、QQ 群白名单及全量只读配置",
+      "placement": "sidebar",
+      "icon": "settings",
+      "mode": "custom",
+      "entry": "webui/system.html",
+      "layout": "document",
+      "queries": {
+        "config": {
+          "api": "webui_config_summary",
+          "version": "1"
+        },
+        "admin": {
+          "api": "webui_admin_summary",
+          "version": "1"
+        }
+      },
+      "actions": {
+        "save": {
+          "api": "webui_config_save",
+          "version": "1",
+          "parameters": {
+            "section": {"type": "string", "required": true, "max_length": 64},
+            "key": {"type": "string", "required": true, "max_length": 64},
+            "value": {"type": "string", "required": true, "max_length": 4000}
+          },
+          "confirmation": "确认修改该配置项？保存后写入 config.toml 并立即热生效。"
+        }
+      }
+    }
+  ]
+}
