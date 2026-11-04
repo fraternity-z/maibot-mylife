@@ -83,7 +83,7 @@ class AdminService:
         """将不同管理范围格式化为可复制文本，并保持敏感字段已经脱敏。"""
         data=await self.snapshot(scope,now,limit); scope=data["scope"]
         if scope=="overview":
-            return ("Mai_life 管理概览\n"
+            return ("麦日常 管理概览\n"
                     f"用户 {data['users']}（主人 {data['owners']}）｜待确认日期 {data['pending_dates']}\n"
                     f"书柜 {data['bookshelf_documents']}（私人 {data['private_documents']}）｜待发送主动 {data['pending_proactive']}\n"
                     f"今日模型调用 {data['token_calls_today']}｜Token {data['token_total_today']}｜搜索 API 请求 {data['search_calls_today']}\n"

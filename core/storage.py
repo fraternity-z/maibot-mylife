@@ -1,4 +1,4 @@
-"""Transactional SQLite storage for Mai_life."""
+"""Transactional SQLite storage for Mai_mylife."""
 from __future__ import annotations
 
 import asyncio

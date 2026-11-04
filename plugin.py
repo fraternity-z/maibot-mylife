@@ -1,4 +1,4 @@
-"""Mai_life v1.24.9 插件入口。"""
+"""Mai_mylife v1.0.0 插件入口。"""
 from __future__ import annotations
 
 from datetime import date,datetime,timedelta,timezone
@@ -400,7 +400,7 @@ class MaiLifePlugin(MaiBotPlugin):
         if self.config.plugin.enabled:
             await self._maintenance_tick(allow_weather_network=False); self._start_tasks()
             self._spawn_transient(self._env.refresh_weather(force=True),"mai-life-weather-initial")
-        self.ctx.logger.info(f"[MaiLife] 麦生活 v{PLUGIN_VERSION} 加载完成")
+        self.ctx.logger.info(f"[MaiLife] 麦日常 v{PLUGIN_VERSION} 加载完成")
 
     async def on_unload(self)->None:
         """先阻止新工作进入，再取消并等待所有任务，最后关闭 SQLite。"""
@@ -414,7 +414,7 @@ class MaiLifePlugin(MaiBotPlugin):
         self._moment_hints.clear(); self._moment_judges.clear()
         if self._store:await self._store.close()
         self._command_replies=None
-        self.ctx.logger.info("[MaiLife] 麦生活已卸载")
+        self.ctx.logger.info("[MaiLife] 麦日常已卸载")
 
     async def on_config_update(self,scope:str,config_data:dict[str,Any],version:str)->None:
         """用重载标记包住完整热更新，避免 Hook 读取一半新一半旧的服务状态。"""
@@ -1570,7 +1570,7 @@ class MaiLifePlugin(MaiBotPlugin):
     async def tool_web_search(self,**kwargs:Any)->dict[str,Any]:
         """向 Planner/Replyer 提供宿主统一联网搜索，不直接发送消息或创建主动契机。"""
         if not self.config.plugin.enabled:
-            return {"success":False,"content":"麦生活插件当前已关闭。"}
+            return {"success":False,"content":"麦日常插件当前已关闭。"}
         if not self._information or not self._env:
             return {"success":False,"content":"联网搜索服务尚未初始化。"}
         query=str(kwargs.get("query") or "").strip()
@@ -1612,7 +1612,7 @@ class MaiLifePlugin(MaiBotPlugin):
     async def tool_get_schedule(self,**kwargs:Any)->dict[str,Any]:
         """群聊专用：把麦麦今日日程与当前场景交给 LLM，弥补群轮次不注入私聊背景的缺口。"""
         if not self.config.plugin.enabled:
-            return {"success":False,"content":"麦生活插件当前已关闭。"}
+            return {"success":False,"content":"麦日常插件当前已关闭。"}
         if not self._schedule or not self._env:
             return {"success":False,"content":"日程服务尚未初始化。"}
         now=self._env.now()
@@ -1682,7 +1682,7 @@ class MaiLifePlugin(MaiBotPlugin):
         """命令菜单只发纯文本（v1.23.0 起移除 Pillow 生图）。"""
         return await self._send_command(kwargs,build_command_usage_text(notice))
 
-    @Command(name="/麦麦",pattern=r"^(?:/麦麦|/mai)(?:\s+(?P<content>[\s\S]+))?$",description="查看麦生活指令菜单")
+    @Command(name="/麦麦",pattern=r"^(?:/麦麦|/mai)(?:\s+(?P<content>[\s\S]+))?$",description="查看麦日常指令菜单")
     async def cmd_menu(self,**kwargs:Any)->tuple[bool,str,int]:
         if not await self._command_access(kwargs):return await self._send_command(kwargs,PRIVATE_COMMAND_ACCESS_DENIED)
         groups=kwargs.get("matched_groups") if isinstance(kwargs.get("matched_groups"),dict) else {}
@@ -1693,7 +1693,7 @@ class MaiLifePlugin(MaiBotPlugin):
         sent=await self._send_command_menu(kwargs,notice)
         return False,"未知子命令，已显示菜单" if sent[0] else sent[1],2
 
-    @Command(name="/麦麦状态",pattern=r"^(?:/麦麦状态|/mai_status)(?=\s|$)",description="查看麦生活与消息管线状态")
+    @Command(name="/麦麦状态",pattern=r"^(?:/麦麦状态|/mai_status)(?=\s|$)",description="查看麦日常与消息管线状态")
     async def cmd_status(self,**kwargs:Any)->tuple[bool,str,int]:
         if not await self._command_access(kwargs):return await self._send_command(kwargs,PRIVATE_COMMAND_ACCESS_DENIED)
         return await self._send_command(kwargs,await self._status_report())
@@ -1759,11 +1759,11 @@ class MaiLifePlugin(MaiBotPlugin):
         }
         return await self._send_command(kwargs,str(result.get("message") if result.get("success") else result.get("error")))
 
-    @Command(name="/麦麦配置",pattern=r"^(?:/麦麦配置|/mai_config)(?=\s|$)",description="查看麦生活配置摘要")
+    @Command(name="/麦麦配置",pattern=r"^(?:/麦麦配置|/mai_config)(?=\s|$)",description="查看麦日常配置摘要")
     async def cmd_config(self,**kwargs:Any)->tuple[bool,str,int]:
         if not await self._command_access(kwargs):return await self._send_command(kwargs,PRIVATE_COMMAND_ACCESS_DENIED)
         group_gate_mode="按设定时间" if self.config.group.gate_mode=="time_window" else "按日程判断"
-        text=(f"麦生活：{'开启' if self.config.plugin.enabled else '关闭'}\n"
+        text=(f"麦日常：{'开启' if self.config.plugin.enabled else '关闭'}\n"
               f"配置用户：已配置 {len(self.config.users.profiles)} 个（启用 {sum(1 for p in self.config.users.profiles if p.enabled)} 个）\n"
               f"休息闸门：{('开启（按设定时间）' if self.config.rest_gate.gate_mode=='time_window' else '开启（按日程判断）') if self.config.rest_gate.enabled else '关闭'}\n"
               f"睡前流程：{('跟随日程睡眠段' if self.config.rest_gate.gate_mode=='schedule' else '与夜间闸门同时段')+'（静默 %d 分钟后入睡）' % BEDTIME_SILENCE_MINUTES if self.config.rest_gate.enabled else '关闭'}\n"
@@ -1776,7 +1776,7 @@ class MaiLifePlugin(MaiBotPlugin):
               f"模型任务：{self.config.models.fast_task}/{self.config.models.reasoning_task}")
         return await self._send_command(kwargs,text)
 
-    @Command(name="/麦麦帮助",pattern=r"^(?:/麦麦帮助|/mai_help)(?=\s|$)",description="查看麦生活指令")
+    @Command(name="/麦麦帮助",pattern=r"^(?:/麦麦帮助|/mai_help)(?=\s|$)",description="查看麦日常指令")
     async def cmd_help(self,**kwargs:Any)->tuple[bool,str,int]:
         if not await self._command_access(kwargs):return await self._send_command(kwargs,PRIVATE_COMMAND_ACCESS_DENIED)
         return await self._send_command_menu(kwargs)
@@ -1811,7 +1811,7 @@ class MaiLifePlugin(MaiBotPlugin):
 
     async def _status_report(self)->str:
         """聚合生活、消息、模型、联网与后台任务健康状态供诊断命令展示。"""
-        if not self._ready:return "麦生活尚未初始化。"
+        if not self._ready:return "麦日常尚未初始化。"
         assert self._store and self._env and self._schedule and self._llm and self._information and self._creation
         state=await self._store.get_state(); weather=await self._store.get_weather() or {"description":"天气未知"}
         context=await self._schedule.context(self._env.now())
@@ -1831,7 +1831,7 @@ class MaiLifePlugin(MaiBotPlugin):
         narrative_note=("；叙事任务无可用模型，梦境/日记/创作为占位内容"
                         if any(not self._llm.task_available(name)
                                for name in ("dream","diary","creation_body")) else "")
-        return (f"麦生活 v{PLUGIN_VERSION}\n精力：{float(state.get('energy',0)):.0f}/100（0 耗尽、100 满电）  "
+        return (f"麦日常 v{PLUGIN_VERSION}\n精力：{float(state.get('energy',0)):.0f}/100（0 耗尽、100 满电）  "
                 f"饥饿：{float(state.get('hunger',0)):.0f}/100（0 刚吃饱、100 非常饿）\n"
                 f"心情：{mood:+.2f}（{_mood_label(mood)}）  "
                 f"睡眠：{_SLEEP_PHASE_ZH.get(str(state.get('sleep_phase') or ''),str(state.get('sleep_phase') or '未知'))}\n"
@@ -1913,7 +1913,7 @@ class MaiLifePlugin(MaiBotPlugin):
     async def api_schedule_provider_info(self,**kwargs:Any)->dict[str,Any]:
         """maibot.schedule 协议入口：识别提供方、时区与支持的查询形态；不依赖服务就绪。"""
         return {"success":True,"error":None,"data":{
-            "provider_id":"maibot-community.mai-life","protocol":"maibot.schedule",
+            "provider_id":"fraternity-z.mai-mylife","protocol":"maibot.schedule",
             "protocol_version":1,"api_version":"1","scope":"global",
             "timezone":self._schedule_tz_name(),"capabilities":["snapshot","timeline"],
             "max_query_hours":72}}
@@ -2013,7 +2013,7 @@ class MaiLifePlugin(MaiBotPlugin):
         if not inserted:return {"success":False,"error":"opportunity_id_conflict"}
         return {"success":True,"opportunity_id":oid}
 
-    @API(name="admin_snapshot",description="获取 Mai_life 私有管理摘要",version="1",public=False)
+    @API(name="admin_snapshot",description="获取麦日常私有管理摘要",version="1",public=False)
     async def api_admin_snapshot(self,scope:str="overview",limit:int=20,**kwargs:Any)->dict[str,Any]:
         """保留给 Host 鉴权桥或插件自身；不作为其他插件可调用的公共 API。"""
         del kwargs
@@ -2637,13 +2637,13 @@ class MaiLifePlugin(MaiBotPlugin):
             return {"success":False,"error":f"{type(exc).__name__}: {exc}"[:200]}
 
     @HomeCard(
-        name="mai_life_management",title="麦生活管理",
+        name="mai_life_management",title="麦日常管理",
         description="配置生活、社交、联网与书柜模块；运行明细请在 WebUI「系统与配置」页查看。",
         content=[
             {"type":"key_value","entries":{"版本":PLUGIN_VERSION,"诊断指令":"/麦麦状态","私密 API":"不公开"}},
             {"type":"list","items":["用户角色与主动额度","QQ群与日期候选","联网服务、书柜与 Token 聚合"]},
         ],
-        link_url="/plugin-config?plugin=maibot-community.mai-life",link_label="打开麦生活配置",
+        link_url="/plugin-config?plugin=fraternity-z.mai-mylife",link_label="打开麦日常配置",
         icon="heart-pulse",width="medium",order=420,
     )
     async def home_card_management(self,**kwargs:Any)->dict[str,Any]:

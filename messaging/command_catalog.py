@@ -1,4 +1,4 @@
-"""Mai_life 指令菜单的结构化目录与纯文本降级内容。"""
+"""Mai_mylife 指令菜单的结构化目录与纯文本降级内容。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,7 +39,7 @@ COMMAND_SECTIONS:tuple[CommandSection,...]=(
 
 def build_command_usage_text(notice:str="")->str:
     """构造不依赖 Markdown 的命令菜单文本，命令菜单的唯一发送形态。"""
-    lines=["麦生活 · 指令中心","输入 /麦麦 或 /麦麦帮助 可再次查看菜单。"]
+    lines=["麦日常 · 指令中心","输入 /麦麦 或 /麦麦帮助 可再次查看菜单。"]
     clean_notice=" ".join(str(notice or "").replace("\x00","").split())[:120]
     if clean_notice:lines.extend(("",clean_notice))
     for section in COMMAND_SECTIONS:

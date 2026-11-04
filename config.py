@@ -1,4 +1,4 @@
-"""Mai_life WebUI 配置模型。
+"""Mai_mylife WebUI 配置模型。
 
 所有分组和字段都提供中文标签、中文说明及英文 i18n，避免 WebUI 直接显示
 ``user_id``、``wake_probability`` 等内部字段名。
@@ -12,7 +12,7 @@ import re
 from maibot_sdk import Field, PluginConfigBase
 from pydantic import ValidationInfo, field_validator, model_validator
 
-PLUGIN_VERSION = "1.24.9"
+PLUGIN_VERSION = "1.0.0"
 CONFIG_SCHEMA_VERSION = "1.13.0"
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
@@ -86,10 +86,10 @@ class PluginSettings(PluginConfigBase):
     )
     enabled: bool = Field(
         default=True,
-        description="麦生活总开关。关闭后停止状态维护、日程生成和主动私聊。",
+        description="麦日常总开关。关闭后停止状态维护、日程生成和主动私聊。",
         json_schema_extra=_ui(
-            "启用麦生活", "关闭后保留数据库，但停止所有后台模拟与主动行为。", 0,
-            label_en="Enable Mai Life", hint_en="Keep data but stop simulation and proactive behavior when disabled.",
+            "启用麦日常", "关闭后保留数据库，但停止所有后台模拟与主动行为。", 0,
+            label_en="Enable Mai MyLife", hint_en="Keep data but stop simulation and proactive behavior when disabled.",
         ),
     )
     admin_user_ids: list[str] = Field(
@@ -132,8 +132,8 @@ class UserProfile(PluginConfigBase):
         default="",
         description="QQ 用户 ID。",
         json_schema_extra=_ui(
-            "QQ 号", "填写允许进入麦生活系统的 QQ 号。", 0,
-            label_en="QQ User ID", hint_en="QQ account allowed to use Mai Life.", placeholder="123456789",
+            "QQ 号", "填写允许进入麦日常系统的 QQ 号。", 0,
+            label_en="QQ User ID", hint_en="QQ account allowed to use Mai MyLife.", placeholder="123456789",
         ),
     )
     enabled: bool = Field(
@@ -256,9 +256,9 @@ class UsersSettings(PluginConfigBase):
 
     profiles: list[UserProfile] = Field(
         default_factory=list,
-        description="允许进入麦生活系统的私聊用户。",
+        description="允许进入麦日常系统的私聊用户。",
         json_schema_extra=_ui(
-            "私聊用户列表", "麦生活状态全局共享，但每位用户的关系、额度和免打扰相互独立。", 0,
+            "私聊用户列表", "麦日常状态全局共享，但每位用户的关系、额度和免打扰相互独立。", 0,
             label_en="Private User Profiles", hint_en="Life state is global while relationship, quota and quiet hours are per user.",
         ),
     )
@@ -412,7 +412,7 @@ class EnvironmentSettings(PluginConfigBase):
         default="Shanghai",
         description="Open-Meteo 查询天气时使用的城市。",
         json_schema_extra=_ui(
-            "天气城市", "填写麦生活所在地的城市名，插件会自动查询天气坐标。", 1,
+            "天气城市", "填写麦日常所在地的城市名，插件会自动查询天气坐标。", 1,
             label_en="Weather City", hint_en="City name used to automatically resolve weather coordinates.", placeholder="Shanghai",
         ),
     )
@@ -889,7 +889,7 @@ class ContextSettings(PluginConfigBase):
     )
     prompt_max_chars: int = Field(
         default=4000, ge=600, le=8000, description="Planner 生活背景的最大字符数。",
-        json_schema_extra=_ui("上下文长度上限", "限制额外 Prompt 大小，避免状态信息挤占正常聊天。", 4, label_en="Context Character Limit", hint_en="Maximum characters appended by Mai Life."),
+        json_schema_extra=_ui("上下文长度上限", "限制额外 Prompt 大小，避免状态信息挤占正常聊天。", 4, label_en="Context Character Limit", hint_en="Maximum characters appended by Mai MyLife."),
     )
 
 
@@ -1091,7 +1091,7 @@ class LinkageSettings(PluginConfigBase):
 
 
 class MaiLifeSettings(PluginConfigBase):
-    """麦生活完整配置。"""
+    """麦日常完整配置。"""
 
     plugin: PluginSettings = Field(
         default_factory=PluginSettings,
@@ -1099,7 +1099,7 @@ class MaiLifeSettings(PluginConfigBase):
     )
     users: UsersSettings = Field(
         default_factory=UsersSettings,
-        json_schema_extra=_ui("私聊用户", "配置允许互动和主动私聊的用户。", 1, label_en="Private Users", hint_en="Users allowed to interact with Mai Life."),
+        json_schema_extra=_ui("私聊用户", "配置允许互动和主动私聊的用户。", 1, label_en="Private Users", hint_en="Users allowed to interact with Mai MyLife."),
     )
     group: GroupChatSettings = Field(
         default_factory=GroupChatSettings,

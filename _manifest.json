@@ -1,12 +1,12 @@
 {
   "manifest_version": 2,
-  "id": "maibot-community.mai-life",
-  "name": "麦生活",
-  "version": "1.24.9",
+  "id": "fraternity-z.mai-mylife",
+  "name": "麦日常",
+  "version": "1.0.0",
   "description": "让麦麦拥有持续生活、消息体验、低频联网见闻以及自己的书柜与创作",
   "author": {
-    "name": "octmicy",
-    "url": "https://github.com/octmicy/Mai_life"
+    "name": "fraternity-z",
+    "url": "https://github.com/fraternity-z/maibot-mylife"
   },
   "license": "MIT",
   "host_application": {
@@ -45,8 +45,8 @@
     ]
   },
   "urls": {
-    "repository": "https://github.com/octmicy/Mai_life",
-    "homepage": "https://github.com/octmicy/Mai_life",
+    "repository": "https://github.com/fraternity-z/maibot-mylife",
+    "homepage": "https://github.com/fraternity-z/maibot-mylife",
     "documentation": "https://docs.mai-mai.org"
   },
   "display": {

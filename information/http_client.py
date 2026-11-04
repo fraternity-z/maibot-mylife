@@ -15,7 +15,7 @@ import ssl
 from ..config import PLUGIN_VERSION
 
 
-_USER_AGENT=f"Mai_life/{PLUGIN_VERSION} (+https://github.com/octmicy/Mai_life)"
+_USER_AGENT=f"Mai_mylife/{PLUGIN_VERSION} (+https://github.com/fraternity-z/maibot-mylife)"
 _MAX_REDIRECTS=10
 
 

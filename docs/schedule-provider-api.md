@@ -1,6 +1,6 @@
 # 日程提供方接口（maibot.schedule 协议 v1）
 
-适合开发同一 MaiBot 实例内其他插件/工具的接入方（如 MaiTrace）。本页说明如何调用麦生活的日程查询接口、请求参数与返回格式。
+适合开发同一 MaiBot 实例内其他插件/工具的接入方（如 MaiTrace）。本页说明如何调用麦日常的日程查询接口、请求参数与返回格式。
 
 目录：[提供方信息](#提供方信息) · [调用方式](#调用方式) · [返回信封](#返回信封) · [快照接口](#get_schedule_snapshot-当前快照) · [时间线接口](#get_schedule_timeline-时间线查询) · [活动结构](#活动结构) · [错误一览](#错误一览) · [边界与保证](#边界与保证) · [版本约定](#版本约定)
 
@@ -8,7 +8,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 插件 ID | `maibot-community.mai-life` |
+| 插件 ID | `fraternity-z.mai-mylife` |
 | 协议名 | `maibot.schedule` |
 | 协议版本 | `1` |
 | 接口注册版本 | `"1"`（`@API` version，调用时传 `version="1"`） |
@@ -32,7 +32,7 @@
 ```python
 async def read_schedule(ctx):
     response = await ctx.api.call(
-        "maibot-community.mai-life.get_schedule_snapshot",
+        "fraternity-z.mai-mylife.get_schedule_snapshot",
         version="1",
         future_limit=3,
     )
@@ -64,14 +64,14 @@ async def read_schedule(ctx):
 **用途**：识别提供方、协商协议版本。无参数；不依赖日程服务就绪（插件刚启动也能答）。
 
 ```python
-info = await ctx.api.call("maibot-community.mai-life.get_schedule_provider_info", version="1")
+info = await ctx.api.call("fraternity-z.mai-mylife.get_schedule_provider_info", version="1")
 ```
 
 `data` 结构：
 
 ```json
 {
-  "provider_id": "maibot-community.mai-life",
+  "provider_id": "fraternity-z.mai-mylife",
   "protocol": "maibot.schedule",
   "protocol_version": 1,
   "api_version": "1",
@@ -184,7 +184,7 @@ info = await ctx.api.call("maibot-community.mai-life.get_schedule_provider_info"
 - **只读保证**：三个接口都不写库、不调模型、不生成日程；可放心高频调用。
 - **时区单一**：所有时刻字段都是配置时区的 aware ISO 8601（`+08:00` 形式）。时区取自插件配置 `environment.timezone`，修改配置后即刻生效。
 - **当日重生成**：同一天框架被重写（如热更新强制重生成）时活动 id 可能变化、场景清空——以 `revision` 变化为准做增量刷新，不要假设 id 永生不变。
-- **schedule_available=false 不重试生成**：快照只报告现状；想要日程生成是麦生活自己的后台循环的事，与查询无关。
+- **schedule_available=false 不重试生成**：快照只报告现状；想要日程生成是麦日常自己的后台循环的事，与查询无关。
 - **帧与并发**：快照单次读取内 `current`/`next_activities` 来自同一份框架，帧内一致；连续两次调用之间可能跨过重生成。
 
 ## 已知修复

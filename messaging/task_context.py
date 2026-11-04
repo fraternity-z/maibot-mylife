@@ -1,4 +1,4 @@
-"""Track one Mai_life proactive turn across Planner-selected reply anchors."""
+"""Track one Mai_mylife proactive turn across Planner-selected reply anchors."""
 from __future__ import annotations
 
 import asyncio
@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Iterator, Mapping
 
 
-PLUGIN_ID = "maibot-community.mai-life"
+PLUGIN_ID = "fraternity-z.mai-mylife"
 HOST_TASK_PREFIX = f"proactive:{PLUGIN_ID}:"
 
 _TASK_BLOCK_RE = re.compile(
@@ -334,7 +334,7 @@ class ActiveTaskRegistry:
             anchor=(f"当前主动任务编号是 {task.task_id}。若决定调用 reply，请优先把 msg_id 设为该任务编号，"
                     "不要改为较早的用户消息或 Bot 自己刚发出的消息。")
         return (
-            "\n【Mai_life 主动任务约束】\n"
+            "\n【麦日常 主动任务约束】\n"
             f"{anchor}一次任务最多产生一轮可见发送；"
             "发送后等待用户回应，不要自行解释或连续追发。插件仍会在本地按会话任务防重。\n"
         )

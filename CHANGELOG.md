@@ -1,5 +1,11 @@
 # 更新日志
 
+## [1.0.0] - 2026-11-04
+
+### 说明
+
+- 本分支基于 [octmicy/Mai_life](https://github.com/octmicy/Mai_life) v1.24.9 迁移：插件 ID 改为 `fraternity-z.mai-mylife`，显示名改为「麦日常」，作者与仓库信息更换为 fraternity-z，版本号自此重新计数。下方条目为上游历史记录。
+
 ## [1.24.9] - 2026-11-03
 
 ### 新增
@@ -590,7 +596,7 @@
 
 ### 适配 MaiBot 1.2.5 / Plugin SDK 2.8.x（OneKey 桌面版运行时）
 
-- 数据目录迁移到统一持久化目录：优先使用 SDK 2.6+ 的 `ctx.paths.data_dir`（即 `<MaiBot>/data/plugins/maibot-community.mai-life/`），旧 SDK 无该属性时回退插件内 `data/`；首次切换时自动把旧库（含 journal 与损坏备份）整体搬迁，避免升级后数据"消失"。
+- 数据目录迁移到统一持久化目录：优先使用 SDK 2.6+ 的 `ctx.paths.data_dir`（即 `<MaiBot>/data/plugins/fraternity-z.mai-mylife/`），旧 SDK 无该属性时回退插件内 `data/`；首次切换时自动把旧库（含 journal 与损坏备份）整体搬迁，避免升级后数据"消失"。
 - Planner Hook 双兼容 MaiBot 1.2.0 的 Item-first 契约：`maisaka.planner.before_request` 载荷从 `messages` 改为 `items`（旧版 `extra_prompt`/`messages` 不再提供，老写法注入静默失效）。现在按 kwargs 实际存在的键判断：items 模式把背景追加到最后一条 SystemMessageItem 的 text part（无 system item 时插入新 item，item_id 唯一、logical_turn_id 键存在、timestamp 合法）；主动任务标记解析与撤回消息改写同步支持两种载荷；注入失败时安全放行不修改。已用主程序真实反序列化函数 + `validate_context_items` 完成 17 项契约校验。
 - 修复 SDK 2.8.1 `llm.generate` 任务路由 bug：2.8.1 无条件发送 `task_name="utils"`，Host 1.2.5 因此把 `model` 当具体模型名解析而报"未找到模型"，插件所有 LLM 调用静默退到兜底。现按 SDK 签名特征自动选择：新版显式传 `task_name`（`model` 留空），旧版继续用 `model` 传任务名，两个 SDK 版本均正确。
 
@@ -988,9 +994,9 @@
 
 ### 项目标识
 
-- 插件目录：`Mai_life`
-- 插件 ID：`maibot-community.mai-life`
-- 展示名称：`麦麦生活`
+- 插件目录：`maibot-mylife`
+- 插件 ID：`fraternity-z.mai-mylife`
+- 展示名称：`麦日常`
 - 初始独立版本：`1.0.0`
 - 配置 Schema：`1.0.2`
 

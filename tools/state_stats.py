@@ -1,4 +1,4 @@
-"""Mai_life 状态动力学统计工具。
+"""Mai_mylife 状态动力学统计工具。
 
 以只读模式打开插件 SQLite（不影响运行中的库），输出心情/精力/饥饿的每日轨迹、
 睡眠阶段分布与心情事件汇总，供长期调参分析。仅用 Python 标准库，服务器可直接运行：
@@ -45,7 +45,7 @@ def _safe_rows(conn: sqlite3.Connection, sql: str, params: tuple = ()):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Mai_life 状态动力学统计")
+    parser = argparse.ArgumentParser(description="Mai_mylife 状态动力学统计")
     parser.add_argument("db", nargs="?", default="data/mai_life.db",
                         help="mai_life.db 路径（默认 data/mai_life.db，需在插件目录运行）")
     parser.add_argument("--days", type=int, default=30,

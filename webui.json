@@ -3,7 +3,7 @@
   "required_capabilities": [
     "custom_pages"
   ],
-  "workspace_title": "麦生活",
+  "workspace_title": "麦日常",
   "pages": [
     {
       "id": "overview",
