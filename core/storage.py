@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 # 长期运行记录（互动、主动事件、契机、转述候选/事件、跳过统计）的保留天数。
 # 这些表没有过期字段驱动的外部清理，超期行必须在 cleanup_runtime_records 中删除，
 # 否则只会无限增长；pending 与在途行永远保留，避免打断正在结算的引用。
@@ -181,6 +181,7 @@ class LifeStore:
               user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, proactive_enabled INTEGER NOT NULL,
               display_name TEXT NOT NULL, temperature REAL NOT NULL,
               role TEXT NOT NULL DEFAULT 'friend', daily_proactive_max INTEGER NOT NULL DEFAULT 1,
+              daily_proactive_unlimited INTEGER NOT NULL DEFAULT 0,
               quiet_start TEXT NOT NULL, quiet_end TEXT NOT NULL,
               stream_id TEXT NOT NULL DEFAULT '', last_user_message_at REAL NOT NULL DEFAULT 0,
               last_proactive_at REAL NOT NULL DEFAULT 0,
@@ -399,6 +400,7 @@ class LifeStore:
         # v1 数据库可能已经存在 users 表；只补列，不重建用户数据。
         self._ensure_column("users", "role", "TEXT NOT NULL DEFAULT 'friend'")
         self._ensure_column("users", "daily_proactive_max", "INTEGER NOT NULL DEFAULT 1")
+        self._ensure_column("users", "daily_proactive_unlimited", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("proactive_opportunities", "target_user_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("relay_candidates", "opportunity_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("proactive_events", "host_task_id", "TEXT NOT NULL DEFAULT ''")
@@ -656,12 +658,14 @@ class LifeStore:
                     role=str(getattr(p,"role","friend") or "friend")
                     daily_limit=max(0,min(20,int(getattr(p,"daily_proactive_max",1))))
                     conn.execute(
-                        """INSERT INTO users(user_id,enabled,proactive_enabled,display_name,temperature,role,daily_proactive_max,quiet_start,quiet_end)
-                        VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+                        """INSERT INTO users(user_id,enabled,proactive_enabled,display_name,temperature,role,daily_proactive_max,daily_proactive_unlimited,quiet_start,quiet_end)
+                        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
                         enabled=excluded.enabled,proactive_enabled=excluded.proactive_enabled,
                         role=excluded.role,daily_proactive_max=excluded.daily_proactive_max,
+                        daily_proactive_unlimited=excluded.daily_proactive_unlimited,
                         quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end""",
-                        (uid,int(p.enabled),int(p.proactive_enabled),"",float(p.initial_temperature),role,daily_limit,p.quiet_start,p.quiet_end),
+                        (uid,int(p.enabled),int(p.proactive_enabled),"",float(p.initial_temperature),role,daily_limit,
+                         int(getattr(p,"daily_proactive_unlimited",False)),p.quiet_start,p.quiet_end),
                     )
                 if seen:
                     marks=",".join("?" for _ in seen)
@@ -754,12 +758,35 @@ class LifeStore:
             ).fetchall()
             return [str(row[0]) for row in reversed(rows) if str(row[0]).strip()]
 
-    async def add_proactive_pending(self, event_id: str, user_id: str, opportunity_id: str, stream_id: str, now: float, expires_at: float) -> None:
+    async def last_proactive_checks(self, user_ids: Iterable[str]) -> dict[str, float]:
+        """批量读取最近一次 Planner 判断时间，沉默或失败也计入判断间隔。"""
+        ids=list(dict.fromkeys(str(user_id) for user_id in user_ids if str(user_id)))
+        if not ids:return {}
+        marks=",".join("?" for _ in ids)
         async with self._lock:
-            self.conn.execute(
-                "INSERT INTO proactive_events(id,user_id,opportunity_id,stream_id,status,created_at,expires_at) VALUES(?,?,?,?,?,?,?)",
-                (event_id,user_id,opportunity_id,stream_id,"pending",now,expires_at),
-            ); self.conn.commit()
+            rows=self.conn.execute(
+                f"SELECT user_id,MAX(created_at) FROM proactive_events WHERE user_id IN ({marks}) GROUP BY user_id",
+                ids,
+            ).fetchall()
+            return {str(row[0]):float(row[1]) for row in rows}
+
+    async def add_proactive_pending(self, event_id: str, user_id: str, opportunity_id: str, stream_id: str,
+                                   now: float, expires_at: float, *, min_interval_seconds: float = 0) -> bool:
+        """原子登记主动判断；提供间隔时同时防止同一用户并发或过频判断。"""
+        async with self._lock:
+            with self._tx() as conn:
+                if min_interval_seconds>0:
+                    recent=conn.execute(
+                        """SELECT 1 FROM proactive_events WHERE user_id=?
+                        AND (created_at>? OR (status='pending' AND expires_at>?)) LIMIT 1""",
+                        (user_id,now-min_interval_seconds,now),
+                    ).fetchone()
+                    if recent:return False
+                conn.execute(
+                    "INSERT INTO proactive_events(id,user_id,opportunity_id,stream_id,status,created_at,expires_at) VALUES(?,?,?,?,?,?,?)",
+                    (event_id,user_id,opportunity_id,stream_id,"pending",now,expires_at),
+                )
+                return True
 
     async def set_proactive_task_id(self, event_id: str, host_task_id: str) -> bool:
         """关联 Host 主动任务，后续只确认该任务实际产生的发送。"""

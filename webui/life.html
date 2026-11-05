@@ -824,9 +824,10 @@
     grid.innerHTML = filtered.map((u) => {
       const isOwner = u.role === 'owner';
       const temp = Math.max(0, Math.min(100, Number(u.temperature || 0)));
+      const unlimitedPro = Boolean(u.daily_proactive_unlimited);
       const maxPro = Math.max(0, Number(u.daily_proactive_max || 0));
       const usedPro = Math.max(0, Number(u.proactive_count || 0));
-      const dotCount = Math.min(10, maxPro);
+      const dotCount = unlimitedPro ? 0 : Math.min(10, maxPro);
       let dotsHtml = '';
       for (let i = 0; i < dotCount; i++) {
         dotsHtml += `<span class="ml-quota-dot ${i < usedPro ? 'used' : ''}"></span>`;
@@ -860,7 +861,7 @@
             <span>今日主动额度 (${u.proactive_enabled ? '开启' : '关闭'})</span>
             <span style="display:inline-flex;align-items:center;gap:6px;">
               ${dotsHtml}
-              <strong style="color:var(--ml-fg);font-variant-numeric:tabular-nums;">${usedPro}/${maxPro}</strong>
+              <strong style="color:var(--ml-fg);font-variant-numeric:tabular-nums;">${usedPro}/${unlimitedPro ? '无上限' : maxPro}</strong>
             </span>
           </div>
 

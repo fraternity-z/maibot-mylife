@@ -26,7 +26,7 @@
 
 [plugin]
 # 配置结构版本，请勿手动修改。
-config_version = "1.15.0"
+config_version = "1.16.0"
 
 # 插件总开关。关闭后保留数据库，但停止状态维护、日程生成和主动消息。
 enabled = true
@@ -55,7 +55,11 @@ proactive_enabled = false
 # 关系角色：friend / owner。最多只能有一个 owner。
 role = "friend"
 
-# 明确填写 0～20；0 禁止主动，朋友通常为 1，主人通常为 2。
+# 改为 true 可取消该用户的每日主动次数上限，由 Planner 自主决定是否开口。
+# 仅取消日额度，仍遵守冷却、工作时段和免打扰；可能增加宿主模型调用。
+daily_proactive_unlimited = false
+
+# 未开启不限次数时生效，填写 0～20；0 禁止主动，朋友通常为 1，主人通常为 2。
 daily_proactive_max = 1
 
 # 首次创建档案时的关系温度，范围 0～100。推荐保持 30。
@@ -74,6 +78,7 @@ group_to_private_enabled = false
 # enabled = true
 # proactive_enabled = true
 # role = "owner"
+# daily_proactive_unlimited = false
 # daily_proactive_max = 2
 # initial_temperature = 30
 # quiet_start = "00:00"
@@ -209,11 +214,12 @@ template_file = "mai_template.json"
 # 主动私聊总开关。关闭后仍会维护日程和生活记忆。
 enabled = true
 
-# 检查主动契机的间隔，范围 1～60 分钟。
-patrol_interval_minutes = 10
-
-# 同一用户两次主动消息之间的最小间隔，单位分钟。
-min_interval_minutes = 180
+# 主动判断与发送统一间隔，默认 180，范围 1～1440 分钟；每位用户分别计时。
+# 每轮最多选择一位符合约束且到期的用户，优先最久未判断者，多用户时可能延后。
+# 无生活契机或契机分数未达标时也可自主考虑，Planner 可以沉默，不得虚构事件。
+# 判断（包括沉默）或实际发送后都至少等待此间隔；判断时间持久保存，重启不会立即补判断。
+# 旧配置的判断间隔与最小发送间隔合并时取较长值，保存后只保留此键。
+patrol_interval_minutes = 180
 
 # 用户刚发言后多久不再主动开新话题，单位分钟。
 recent_user_silence_minutes = 30
@@ -221,7 +227,7 @@ recent_user_silence_minutes = 30
 # 主动触发与 Replyer 实际回复的确认窗口，单位秒。通常无需修改。
 pending_expire_seconds = 120
 
-# 主动候选进入 Planner 终审所需的最低综合分。越高越克制。
+# 生活契机作为 Planner 参考所需的最低综合分；未达标仍可自主判断是否联系。
 score_threshold = 0.45
 
 

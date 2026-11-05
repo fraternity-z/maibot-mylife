@@ -49,12 +49,13 @@ def test_creation_uses_schedule_without_a_vitals_store(modules,kind,force,expect
 @pytest.mark.parametrize("host_success",[True,False])
 def test_proactive_needs_no_vitals_and_preserves_failed_trigger_cleanup(modules,host_success):
     config=SimpleNamespace(rest_gate=SimpleNamespace(enabled=False),proactive=SimpleNamespace(
-        enabled=True,max_retries_per_opportunity=2,min_interval_minutes=30,recent_user_silence_minutes=10,
+        enabled=True,patrol_interval_minutes=30,max_retries_per_opportunity=2,recent_user_silence_minutes=10,
         score_threshold=0.5,pending_expire_seconds=300))
     opportunity={"id":"o","weight":0.8,"topic":"午饭做了新菜","motive":"分享日常","privacy":"normal"}
     user={"user_id":"u","stream_id":"s","quiet_start":"00:00","quiet_end":"00:00",
           "daily_proactive_max":2,"temperature":30}
     store=SimpleNamespace(expire_pending=AsyncMock(),active_opportunities=AsyncMock(return_value=[opportunity]),
+        last_proactive_checks=AsyncMock(return_value={}),
         list_users=AsyncMock(return_value=[user]),active_hours_batch=AsyncMock(return_value={}),
         pending_proactive_users=AsyncMock(return_value=set()),
         consume_opportunity=AsyncMock(return_value=True),add_proactive_pending=AsyncMock(),

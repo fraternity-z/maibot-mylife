@@ -10,10 +10,10 @@ from typing import Any, ClassVar, Literal
 import re
 
 from maibot_sdk import Field, PluginConfigBase
-from pydantic import field_validator, model_validator
+from pydantic import TypeAdapter, field_validator, model_validator
 
-PLUGIN_VERSION = "1.0.0"
-CONFIG_SCHEMA_VERSION = "1.15.0"
+PLUGIN_VERSION = "1.1.0"
+CONFIG_SCHEMA_VERSION = "1.16.0"
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -185,10 +185,18 @@ class UserProfile(PluginConfigBase):
     )
     daily_proactive_max: int = Field(
         default=1, ge=0, le=20,
-        description="该用户每天最多实际收到的主动消息次数（硬上限，不是目标次数）。",
+        description="未开启不限次数时，该用户每天最多实际收到的主动消息次数（硬上限，不是目标次数）。",
         json_schema_extra=_ui(
-            "用户每日主动上限", "每日最多主动发送 N 次（硬上限，非目标次数）。实际次数常少于该值：受免打扰、冷却、候选评分和 Planner 自主决策约束。0 表示禁止主动消息；主人通常填 2，朋友通常填 1。", 4,
-            label_en="Per-user Daily Proactive Limit", hint_en="Hard cap of proactive messages per day (not a target). Actual count is often lower due to quiet hours, cooldown, scoring and Planner decisions. Zero disables proactive messages.",
+            "用户每日主动上限", "每日最多主动发送 N 次（硬上限，非目标次数）。实际次数常少于该值：受免打扰、冷却、候选评分和 Planner 自主决策约束。0 表示禁止主动消息；开启“每日主动不限次数”后忽略此值。主人通常填 2，朋友通常填 1。", 4,
+            label_en="Per-user Daily Proactive Limit", hint_en="Hard cap of proactive messages per day (not a target). Actual count is often lower due to quiet hours, cooldown, scoring and Planner decisions. Zero disables proactive messages. Ignored when unlimited daily proactive chat is enabled.",
+        ),
+    )
+    daily_proactive_unlimited: bool = Field(
+        default=False,
+        description="是否取消该用户的每日主动次数上限，由 Planner 自主判断是否发送。",
+        json_schema_extra=_ui(
+            "每日主动不限次数", "开启后忽略每日主动上限，由 Planner 结合生活契机和互动情况决定是否发送；仍遵守主动私聊开关、免打扰和冷却，不保证每天发送。", 5,
+            label_en="Unlimited Daily Proactive Chat", hint_en="Ignore the daily cap and let Planner decide using life opportunities and interaction context. Proactive switches, quiet hours and cooldown still apply; messages are not guaranteed every day.",
         ),
     )
     initial_temperature: int = Field(
@@ -803,12 +811,12 @@ class ScheduleSettings(PluginConfigBase):
 
 
 class ProactiveSettings(PluginConfigBase):
-    """主动私聊的公共冷却和评分阈值；每日额度只在用户档案中配置。"""
+    """主动私聊的统一判断与发送间隔和契机评分；每日额度只在用户档案中配置。"""
 
     __ui_label__: ClassVar[str] = "主动私聊"
     __ui_order__: ClassVar[int] = 9
     __ui_i18n__: ClassVar[dict[str, dict[str, str]]] = {
-        "en_US": {"title": "Proactive Private Chat", "description": "Shared cooldown and candidate scoring settings."}
+        "en_US": {"title": "Proactive Private Chat", "description": "Shared decision and message interval with opportunity scoring settings."}
     }
 
     enabled: bool = Field(
@@ -820,19 +828,11 @@ class ProactiveSettings(PluginConfigBase):
         ),
     )
     patrol_interval_minutes: int = Field(
-        default=10, ge=1, le=60,
-        description="检查主动聊天契机的间隔。",
-        json_schema_extra=_ui(
-            "主动巡检间隔（分钟）", "建议 10 分钟。更短只会增加检查频率，不代表一定发送更多消息。", 1,
-            label_en="Proactive Patrol Interval (min)", hint_en="How often proactive opportunities are evaluated.",
-        ),
-    )
-    min_interval_minutes: int = Field(
         default=180, ge=1, le=1440,
-        description="同一用户两次主动消息之间的最小间隔。",
+        description="同一用户的主动判断与实际发送共用的最小间隔，单位分钟。",
         json_schema_extra=_ui(
-            "主动消息最小间隔（分钟）", "默认 180 分钟，防止短时间连续打扰同一用户。", 2,
-            label_en="Minimum Proactive Interval (min)", hint_en="Minimum time between proactive messages to the same user.",
+            "主动判断与发送间隔（分钟）", "默认 180，范围 1～1440。每位用户分别计时；Planner 沉默或实际发送后都至少等待此间隔。每轮最多判断一位到期用户，优先最久未判断者，多用户时可能略延后；没有生活契机时也可自主考虑。", 1,
+            label_en="Proactive Decision and Message Interval (min)", hint_en="Minimum time after each decision or actual message for each user, including silence. Each patrol selects at most one due user, prioritizing the longest wait; multiple users may wait slightly longer.",
         ),
     )
     recent_user_silence_minutes: int = Field(
@@ -861,12 +861,26 @@ class ProactiveSettings(PluginConfigBase):
     )
     score_threshold: float = Field(
         default=0.45, ge=0, le=2,
-        description="主动候选进入 Planner 终审所需的最低综合分。",
+        description="生活契机作为 Planner 判断参考所需的最低综合分。",
         json_schema_extra=_ui(
-            "主动候选分数阈值", "越高越克制。综合考虑契机、关系和用户活跃时间。", 6,
-            label_en="Proactive Candidate Score Threshold", hint_en="Higher values make proactive behavior more conservative.",
+            "主动候选分数阈值", "综合考虑契机、关系和用户活跃时间。未达标时不提供该契机，Planner 仍可自主判断是否联系，但不得虚构事件。", 6,
+            label_en="Proactive Candidate Score Threshold", hint_en="Minimum score for providing a life opportunity. Planner may still consider contacting the user without one, but must not invent events.",
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_intervals(cls, value: Any) -> Any:
+        """旧判断和发送间隔合并时保留较长值，避免升级后增加打扰。"""
+        if not isinstance(value,dict) or "min_interval_minutes" not in value:return value
+        data=dict(value)
+        intervals=[data.pop("min_interval_minutes")]
+        if "patrol_interval_minutes" in data:intervals.append(data["patrol_interval_minutes"])
+        intervals=[TypeAdapter(int).validate_python(interval) for interval in intervals]
+        if any(not 1<=interval<=1440 for interval in intervals):
+            raise ValueError("主动判断与发送间隔必须为 1～1440 分钟")
+        data["patrol_interval_minutes"]=max(intervals)
+        return data
 
 
 class MaiLifeSettings(PluginConfigBase):

@@ -1,4 +1,4 @@
-"""Mai_mylife v1.0.0 插件入口。"""
+"""Mai_mylife v1.1.0 插件入口。"""
 from __future__ import annotations
 
 from datetime import date,datetime,timedelta,timezone
@@ -455,7 +455,7 @@ class MaiLifePlugin(MaiBotPlugin):
     async def _proactive_loop(self)->None:
         while True:
             try:
-                await asyncio.sleep(max(60,self.config.proactive.patrol_interval_minutes*60)); await self._resolve_all_streams()
+                await asyncio.sleep(60); await self._resolve_all_streams()
                 if self._proactive and self._store and self._env:
                     await self._proactive.patrol(self._env.now())
             except asyncio.CancelledError:raise
@@ -1752,6 +1752,7 @@ class MaiLifePlugin(MaiBotPlugin):
                 "temperature":float(user.get("temperature") or 0),
                 "stage":relationship_stage(float(user.get("temperature") or 0)),
                 "proactive_enabled":bool(user.get("proactive_enabled")),
+                "daily_proactive_unlimited":bool(user.get("daily_proactive_unlimited")),
                 "daily_proactive_max":int(user.get("daily_proactive_max") or 0)}
 
     @API(name="get_environment_snapshot",description="获取当前时间、历法和媒介环境快照",version="1",public=True)
@@ -1996,6 +1997,7 @@ class MaiLifePlugin(MaiBotPlugin):
                               "stage":relationship_stage(temperature),
                               "proactive_enabled":bool(row.get("proactive_enabled")),
                               "proactive_count":int(row.get("proactive_count") or 0),
+                              "daily_proactive_unlimited":bool(row.get("daily_proactive_unlimited")),
                               "daily_proactive_max":int(row.get("daily_proactive_max") or 0),
                               "last_message_age":_relative_age(float(row.get("last_user_message_at") or 0),now_ts),
                               "last_proactive_age":_relative_age(float(row.get("last_proactive_at") or 0),now_ts),
@@ -2196,7 +2198,6 @@ class MaiLifePlugin(MaiBotPlugin):
                                 "template_file":str(cfg.schedule.template_file)},
                     "proactive":{"enabled":_switch(cfg.proactive.enabled),
                                  "patrol_interval_minutes":int(cfg.proactive.patrol_interval_minutes),
-                                 "min_interval_minutes":int(cfg.proactive.min_interval_minutes),
                                  "recent_user_silence_minutes":int(cfg.proactive.recent_user_silence_minutes),
                                  "pending_expire_seconds":int(cfg.proactive.pending_expire_seconds),
                                  "max_retries_per_opportunity":int(cfg.proactive.max_retries_per_opportunity),

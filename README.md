@@ -14,7 +14,7 @@
 python tools/build_plugin.py
 ```
 
-生成 `dist/mai-mylife-1.0.0.zip`，文件名随 `_manifest.json` 的版本号变化。脚本读取当前工作树，包含尚未提交的运行代码，排除真实 `config.toml`、数据库、日志、个人日程模板、Git 和代码索引缓存。打包前会检查入口、页面、图标、Python 语法和版本一致性；不要直接压缩整个开发目录。
+生成 `dist/mai-mylife-1.1.0.zip`，文件名随 `_manifest.json` 的版本号变化。脚本读取当前工作树，包含尚未提交的运行代码，排除真实 `config.toml`、数据库、日志、个人日程模板、Git 和代码索引缓存。打包前会检查入口、页面、图标、Python 语法和版本一致性；不要直接压缩整个开发目录。
 
 首次安装：进入 MaiBot WebUI 的“插件扩展”→“更多操作”→“从 ZIP 安装插件”，选择生成的 ZIP；按界面提示重启或重载，然后启用“麦日常”并完成下方配置。当前宿主 ZIP 安装器不会覆盖已安装的相同插件 ID。
 
@@ -29,7 +29,7 @@ python tools/build_plugin.py
 官方市场通过公开 GitHub 仓库和 Release 收录插件。ZIP 用于本地安装或 Release 附件，收录申请填写仓库地址，不上传 ZIP 到索引仓库。
 
 1. 确保 [fraternity-z/maibot-mylife](https://github.com/fraternity-z/maibot-mylife) 是公开仓库，再提交并推送本次源码修改。若另建公开发布仓库，先同步 `_manifest.json.urls` 中的仓库与文档链接，保留插件 ID。确认新文件 `core/network_clock.py` 也已提交，根目录没有真实 `config.toml`。
-2. 在真实 MaiBot 中完成加载、私聊、群聊和 WebUI 验证，再到仓库 Releases 创建 `v1.0.0`（或 `1.0.0`）的 Release。Tag 对应提交中的 `_manifest.json.version` 必须为 `1.0.0`；只推 Tag 或保存草稿不满足收录要求。可附加本地 ZIP，也可以使用 GitHub 自动生成的源码包。尚在测试的版本可勾选 Prerelease。
+2. 在真实 MaiBot 中完成加载、私聊、群聊和 WebUI 验证，再到仓库 Releases 创建 `v1.1.0`（或 `1.1.0`）的 Release。Tag 对应提交中的 `_manifest.json.version` 必须为 `1.1.0`；只推 Tag 或保存草稿不满足收录要求。可附加本地 ZIP，也可以使用 GitHub 自动生成的源码包。尚在测试的版本可勾选 Prerelease。
 3. 打开官方索引仓库的[添加插件申请](https://github.com/Mai-with-u/plugin-repo/issues/new?template=add-plugin.yml)，填写：
    - 插件 ID：`fraternity-z.mai-mylife`
    - 仓库地址：`https://github.com/fraternity-z/maibot-mylife`
@@ -46,7 +46,7 @@ python tools/build_plugin.py
 
 1. 在“私聊用户”中填写真实 QQ 号，并启用该用户。
 2. 最多设置一个 `owner`，其他用户使用 `friend`。
-3. 为每个用户明确填写每日主动上限。
+3. 为每个用户填写每日主动上限；需要不设上限时开启“每日主动不限次数”（`daily_proactive_unlimited = true`）。
 4. 在“环境与天气”中填写城市和时区。中国大陆用 `Asia/Shanghai`，不需要修改服务器时区。
 5. 保存配置并重载插件，使用 `/麦麦状态` 检查任务和模型状态。
 
@@ -168,11 +168,14 @@ v1.24.0 起联网全部走 MaiBot 主程序的统一联网服务（`ctx.web.sear
 
 ### 主动与社交
 
-- 每个 QQ 用户拥有独立的关系温度、活跃时段、免打扰和明确的每日主动额度（硬上限，实际主动次数可能低于该值，属正常）。
-- 主动契机先经过规则筛选，再交给 Planner 决定是否开口；Planner 沉默不消耗实际发送额度。
+- 每个 QQ 用户拥有独立的关系温度、活跃时段、免打扰和每日主动额度。默认有限次，`daily_proactive_max` 是硬上限（`0` 禁止主动）；开启 `daily_proactive_unlimited` 后忽略这个日额度，用户的“允许主动”开关仍须开启。
+- 不限次数只取消每日额度，实际发送仍遵守主动私聊总开关、用户主动开关、统一间隔、用户近期发言避让、工作时段和免打扰，不保证每天发送。
+- “主动判断与发送间隔（分钟）”统一使用 `proactive.patrol_interval_minutes`，默认 `180`，范围 `1～1440`。每位用户分别计时；每轮最多选择一位符合约束且到期的用户交给 Planner，优先最久未判断者，多用户时可能略延后。判断时间持久保存在现有主动事件记录中，重启不会立即补一次判断。
+- 没有生活契机或契机评分未达标时，也会给 Planner 自主考虑是否联系的机会；未达标的契机不作为参考，不得虚构生活事件。Planner 根据当前生活、当日实际主动次数、双方最近互动和上次主动是否未获回复决定是否开口，不因巡检或不限次数凑数，不催回复。
+- Planner 可以沉默，沉默不消耗发送额度，但仍至少等待一个周期；实际发送后也至少等待同样的间隔再判断或发送。旧配置中的 `min_interval_minutes` 自动合并到 `patrol_interval_minutes`，两项都有时取较长值，保存后只保留统一项。缩短间隔或开启不限次数可能增加宿主模型调用。
 - 群聊观察只保存匿名短摘要，不保存群聊原文。
 - `/麦麦转述 群QQ号 内容` 只触发目标群 Planner，不构造 `@`，也不解析群名、昵称或别名。
-- 群转私仅比较真实 QQ 号，并同时受离群时间、用户主动额度和隐私规则限制。
+- 群转私仅比较真实 QQ 号，并同时受离群时间、用户主动设置和隐私规则限制。
 
 ### 记忆与创作
 

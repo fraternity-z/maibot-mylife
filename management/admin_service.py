@@ -44,6 +44,7 @@ class AdminService:
         return [{"user_id":item["user_id"],"display_name":item.get("display_name") or "",
                  "role":item.get("role") or "friend","temperature":round(float(item.get("temperature") or 0),1),
                  "proactive_enabled":bool(item.get("proactive_enabled")),
+                 "daily_proactive_unlimited":bool(item.get("daily_proactive_unlimited")),
                  "daily_proactive_max":int(item.get("daily_proactive_max") or 0),
                  "proactive_count":int(item.get("proactive_count") or 0),
                  "last_user_message_at":float(item.get("last_user_message_at") or 0),
@@ -90,7 +91,7 @@ class AdminService:
                     f"联网 {'开' if data['network_enabled'] else '关'}｜社交 {'开' if data['social_enabled'] else '关'}｜创作 {'开' if data['creation_enabled'] else '关'}")
         if scope=="users":
             lines=["用户角色与主动额度"]
-            lines.extend(f"{item['user_id']} {item['display_name'] or '未读取昵称'}｜{item['role']}｜温度 {item['temperature']}｜主动 {item['proactive_count']}/{item['daily_proactive_max']}"
+            lines.extend(f"{item['user_id']} {item['display_name'] or '未读取昵称'}｜{item['role']}｜温度 {item['temperature']}｜主动 {item['proactive_count']}/{'无上限' if item['daily_proactive_unlimited'] else item['daily_proactive_max']}"
                          for item in data["items"])
         elif scope=="groups":
             lines=["QQ群配置"]
@@ -132,7 +133,8 @@ class AdminService:
             skip=data.get("skip_stats") if isinstance(data,dict) else []
             if skip:
                 labels={"quiet":"免打扰时段","interval":"主动最小间隔","silence":"用户刚发言","daily_limit":"每日额度用尽",
-                        "low_score":"候选分不足","planner_no_reply":"Planner 沉默或超时"}
+                        "low_score":"生活参考未达阈值","planner_no_reply":"Planner 沉默或超时",
+                        "planner_interval":"Planner 判断间隔未到"}
                 lines.append("\n今日主动候选跳过原因")
                 lines.extend(f"{labels.get(item['reason'],item['reason'])}：{item['total']} 次" for item in skip)
         if len(lines)==1:lines.append("暂无记录。")

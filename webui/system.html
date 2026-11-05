@@ -567,6 +567,7 @@
     inspiration_lookback_days: '灵感回溯天数',
     external_reading_enabled: '外部阅读笔记开关',
     patrol_interval_minutes: '后台巡检间隔(分)',
+    'proactive.patrol_interval_minutes': '主动判断与发送间隔（分）',
     continuation_enabled: '长篇连载续写开关',
     continuation_probability: '巡检续写触发概率',
     continuation_min_gap_days: '续写最小间隔天数',
@@ -578,11 +579,10 @@
     generate_hour: '每日框架生成整点(时)',
     detail_lead_minutes: '临近场景细化提前量(分)',
     template_file: '作息模板文件名',
-    min_interval_minutes: '同用户最小主动间隔(分)',
     recent_user_silence_minutes: '用户刚发言静默期(分)',
     pending_expire_seconds: '主动任务待响应过期(秒)',
     max_retries_per_opportunity: '单契机最大重试次数',
-    score_threshold: '主动触发软评分阈值',
+    score_threshold: '生活参考评分阈值',
     retention_days: '统计数据保留天数',
   };
 
@@ -674,6 +674,7 @@
     `).join('') : '<tr><td colspan="4" class="ml-empty">当前无待决或近期主动私聊候选记录</td></tr>';
 
     const skips = pro.skips || [];
+    const skipLabels = { planner_interval: 'Planner 判断间隔未到', low_score: '生活参考未达阈值' };
     const skipsEl = document.getElementById('proactive-skips-bars');
     if (!skips.length) {
       skipsEl.innerHTML = '<div class="ml-empty">今日暂无主动巡检跳过统计</div>';
@@ -684,7 +685,7 @@
         return `
           <div class="ml-skip-row">
             <div class="ml-skip-top">
-              <span><strong>${esc(s.reason)}</strong></span>
+              <span><strong>${esc(skipLabels[s.reason] || s.reason)}</strong></span>
               <span>跳过 <strong>${s.total}</strong> 次 (涉及 ${s.users} 人)</span>
             </div>
             <div class="ml-skip-track">
@@ -745,7 +746,7 @@
       const kvPairs = Object.entries(secObj);
       const matchingPairs = q
         ? kvPairs.filter(([k, v]) => {
-            const label = KEY_LABELS[k] || '';
+            const label = KEY_LABELS[`${secKey}.${k}`] || KEY_LABELS[k] || '';
             const hay = `${secKey} ${meta.title} ${k} ${label} ${v}`.toLowerCase();
             return hay.includes(q);
           })
@@ -761,7 +762,7 @@
           </h3>
           <div>
             ${matchingPairs.map(([k, v]) => {
-              const label = KEY_LABELS[k] || k;
+              const label = KEY_LABELS[`${secKey}.${k}`] || KEY_LABELS[k] || k;
               const valStr = String(v ?? '—');
               const isOn = valStr === '开启' || valStr === '开';
               const isOff = valStr === '关闭' || valStr === '关';
