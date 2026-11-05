@@ -2,13 +2,36 @@
 
 `Mai_mylife` 让同一个麦麦拥有连续的日常生活、日程、记忆和面向不同 QQ 用户的独立关系，同时支持联网见闻、群聊观察与转述、书柜和创作。
 
+当前版本 **1.1.0** · 插件 ID：`fraternity-z.mai-mylife` · [下载 Release](https://github.com/fraternity-z/maibot-mylife/releases/latest) · [更新日志](CHANGELOG.md) · [问题反馈](https://github.com/fraternity-z/maibot-mylife/issues)
+
+本版支持由 Planner 自主判断是否主动聊天：每位用户可设置每日上限或开启不限次数，判断与发送共用默认 180 分钟的间隔，继续遵守工作时段、免打扰与用户主动开关。没有合适话题时可以保持沉默。
+
 ## 项目声明
 
 本项目基于 [octmicy/Mai_life](https://github.com/octmicy/Mai_life)（麦生活，原作者 octmicy/时栖）修改而来，原项目以 MIT 许可证开源，许可证原文见 [LICENSE](LICENSE)。在此感谢原作者的开源贡献。
 
 ## 打包与安装
 
-在本项目源码目录执行（Python 3.11 或更新版本，无额外打包依赖）：
+### 运行要求
+
+- MaiBot：`1.3.16～1.3.99`，需支持插件自定义 WebUI 页面。
+- 插件 SDK：`2.7.0～2.91.99`，沿用 MaiBot 提供的 SDK。
+- Python：`3.11` 或更新版本；宿主需已配置可用的 Planner、Replyer 和插件所用模型任务。
+- Python 依赖：`chinese-calendar>=1.0,<2`、`lunar-python>=1.4,<2`，已在 Manifest 声明。缺少时仅降级节假日、农历与节气信息。
+
+### 安装与更新
+
+从 [Releases](https://github.com/fraternity-z/maibot-mylife/releases) 下载 `mai-mylife-1.1.0.zip`。首次安装：进入 MaiBot WebUI 的“插件扩展”→“更多操作”→“从 ZIP 安装插件”，选择 ZIP；按界面提示重启或重载，然后启用“麦日常”并完成下方配置。当前宿主 ZIP 安装器不会覆盖已安装的相同插件 ID。
+
+也可手动安装：将 ZIP 内容直接解压到 `MaiBot/plugins/fraternity-z_mai-mylife/`，确保该目录直接包含 `_manifest.json` 和 `plugin.py`，不要再套一层目录。
+
+更新已有安装时，先停用插件并备份原插件目录和 `MaiBot/data/plugins/fraternity-z.mai-mylife/`，再把 ZIP 内容覆盖到**原安装目录**，保留该实例的 `config.toml`、`config_back/` 和 `data/`；不要另建同 ID 的第二份插件。启用后用 `/麦麦状态`、`/麦麦休息测试` 检查加载、校时与工作时间，打开插件三个页面确认界面正常。
+
+依赖由宿主根据 Manifest 安装。手动部署时，在运行 MaiBot 的同一个 Python 环境中执行 `python -m pip install -r requirements.txt`；Docker 部署需在容器运行环境中安装。官方安装说明：[安装插件](https://docs.maibot.chat/manual/plugins/)与[管理插件](https://docs.maibot.chat/manual/plugins/management)。
+
+### 从源码打包
+
+在本项目源码目录执行（无额外打包依赖）：
 
 ```powershell
 python tools/build_plugin.py
@@ -16,19 +39,11 @@ python tools/build_plugin.py
 
 生成 `dist/mai-mylife-1.1.0.zip`，文件名随 `_manifest.json` 的版本号变化。脚本读取当前工作树，包含尚未提交的运行代码，排除真实 `config.toml`、数据库、日志、个人日程模板、Git 和代码索引缓存。打包前会检查入口、页面、图标、Python 语法和版本一致性；不要直接压缩整个开发目录。
 
-首次安装：进入 MaiBot WebUI 的“插件扩展”→“更多操作”→“从 ZIP 安装插件”，选择生成的 ZIP；按界面提示重启或重载，然后启用“麦日常”并完成下方配置。当前宿主 ZIP 安装器不会覆盖已安装的相同插件 ID。
-
-也可手动安装：将 ZIP 内容直接解压到 `MaiBot/plugins/fraternity-z_mai-mylife/`，确保该目录直接包含 `_manifest.json` 和 `plugin.py`，不要再套一层目录。本地宿主对应 `E:\code\hhh\MaiBot\plugins\fraternity-z_mai-mylife\`。
-
-更新已有安装时，先停用插件并备份原插件目录和 `MaiBot/data/plugins/fraternity-z.mai-mylife/`，再把 ZIP 内容覆盖到**原安装目录**，保留该实例的 `config.toml`、`config_back/` 和 `data/`；不要另建同 ID 的第二份插件，也不需要卸载后重装。启用后用 `/麦麦状态`、`/麦麦休息测试` 检查加载、校时与工作时间，打开插件三个页面确认界面正常。
-
-日历与农历依赖已在 `_manifest.json.dependencies` 中声明，宿主自动安装；`requirements.txt` 保留供手动部署使用。官方安装说明：[安装插件](https://docs.maibot.chat/manual/plugins/)与[管理插件](https://docs.maibot.chat/manual/plugins/management)。
-
 ## 发布到官方插件中心
 
 官方市场通过公开 GitHub 仓库和 Release 收录插件。ZIP 用于本地安装或 Release 附件，收录申请填写仓库地址，不上传 ZIP 到索引仓库。
 
-1. 确保 [fraternity-z/maibot-mylife](https://github.com/fraternity-z/maibot-mylife) 是公开仓库，再提交并推送本次源码修改。若另建公开发布仓库，先同步 `_manifest.json.urls` 中的仓库与文档链接，保留插件 ID。确认新文件 `core/network_clock.py` 也已提交，根目录没有真实 `config.toml`。
+1. 使用公开仓库 [fraternity-z/maibot-mylife](https://github.com/fraternity-z/maibot-mylife)，提交并推送待发布源码。运行配置、数据库和个人日程模板不应进入仓库或发布包。
 2. 在真实 MaiBot 中完成加载、私聊、群聊和 WebUI 验证，再到仓库 Releases 创建 `v1.1.0`（或 `1.1.0`）的 Release。Tag 对应提交中的 `_manifest.json.version` 必须为 `1.1.0`；只推 Tag 或保存草稿不满足收录要求。可附加本地 ZIP，也可以使用 GitHub 自动生成的源码包。尚在测试的版本可勾选 Prerelease。
 3. 打开官方索引仓库的[添加插件申请](https://github.com/Mai-with-u/plugin-repo/issues/new?template=add-plugin.yml)，填写：
    - 插件 ID：`fraternity-z.mai-mylife`
@@ -46,13 +61,21 @@ python tools/build_plugin.py
 
 1. 在“私聊用户”中填写真实 QQ 号，并启用该用户。
 2. 最多设置一个 `owner`，其他用户使用 `friend`。
-3. 为每个用户填写每日主动上限；需要不设上限时开启“每日主动不限次数”（`daily_proactive_unlimited = true`）。
+3. 需要主动聊天时，开启该用户的“允许主动”，填写每日主动上限；需要不设上限时开启“每日主动不限次数”（`daily_proactive_unlimited = true`）。用户主动开关默认关闭。
 4. 在“环境与天气”中填写城市和时区。中国大陆用 `Asia/Shanghai`，不需要修改服务器时区。
 5. 保存配置并重载插件，使用 `/麦麦状态` 检查任务和模型状态。
 
 管理员 QQ 可以直接在私聊使用菜单、状态、配置和诊断指令，不需要再重复创建私聊用户档案。关系温度和重要日期属于个人档案功能，只有把当前 QQ 加入“私聊用户”并启用档案后才可使用。
 
-输入 `/麦麦` 或 `/麦麦帮助` 会返回纯文本指令菜单。自 v1.23.0 起插件不再本地渲染菜单图片（Pillow 生图链已整体移除），未识别的指令也会落进同一菜单兜底，不会报错。
+输入 `/麦麦` 或 `/麦麦帮助` 会返回纯文本指令菜单。以 `/麦麦` 或 `/mai` 开头但未识别的指令会显示同一菜单。
+
+### WebUI 页面
+
+| 页面 | 内容 |
+| --- | --- |
+| 麦麦此刻 | 当前活动、位置、生活场景、今日日程与 Token 统计 |
+| 记忆与牵挂 | 关系、重要日期、日记、书柜作品和联网见闻 |
+| 系统与配置 | 运行诊断、主动巡检、群白名单和配置；可编辑的标量配置经确认后保存并热生效 |
 
 ### 时间与回复设置
 
@@ -85,39 +108,6 @@ work_end = "23:00"
 
 旧配置自动迁移：启用的固定夜间休息窗转为其外侧工作时段；旧日程模式和已关闭的旧门控转为全天。旧关键词、午休门控、判醒模型和私聊醒来概率不再使用。保存配置后检查工作时间是否符合预期。使用 `/麦麦休息测试` 查看当前完整时间、校时来源和回复设置。
 
-### 安装 lunar-python（可选）
-
-lunar-python 提供农历与节气数据，已在 Manifest 和 requirements.txt 声明。MaiBot 通过 Manifest 自动安装依赖；如果部署环境无法自动安装，可用运行 MaiBot 的同一个 Python 环境手动补装。代码在缺少该包时可降级，只影响农历与节气描述。
-
-关键：用哪个 python 运行 MaiBot，就用同一个环境安装依赖，确保组件装进插件运行时能看到的环境。
-
-如果 MaiBot 运行在虚拟环境（例如 Linux 上的 .venv），要进到 MaiBot 目录，用虚拟环境里的 pip 执行：
-
-```bash
-cd /maibot安装的主文件夹
-.venv/bin/pip install lunar-python
-```
-
-如果 MaiBot 用系统 Python 直接运行，则直接执行：
-
-```bash
-pip install lunar-python
-```
-
-针对 Docker 部署用户：如果你的 MaiBot 是用 Docker 运行的，切勿在宿主机（服务器）上执行安装命令，务必让依赖装进容器内部。推荐修改你的 Dockerfile，在构建阶段加入：
-
-```dockerfile
-RUN pip install --no-cache-dir lunar-python
-```
-
-然后重建并重启容器：
-
-```bash
-docker compose down
-docker compose build
-docker compose up -d
-```
-
 ### 推荐开关
 
 | 功能 | 默认 | 建议 |
@@ -136,14 +126,14 @@ docker compose up -d
 
 ## 联网搜索
 
-v1.24.0 起联网全部走 MaiBot 主程序的统一联网服务（`ctx.web.search` / `ctx.web.fetch`），插件不再维护自有搜索服务列表，也不需要配置或购买任何搜索 API Key。请先在主程序「模型设置→功能分配→联网搜索」中配置并启用服务。
+联网全部走 MaiBot 主程序的统一联网服务（`ctx.web.search` / `ctx.web.fetch`），无需在插件中填写搜索 API Key。请先在主程序「模型设置→功能分配→联网搜索」中配置并启用服务；是否需要 Key、费用与配额取决于宿主所选服务。
 
 插件「联网」设置节提供：
 
 - **启用联网**：联网工具、新闻阅读与主动探索的共同总开关；
 - **允许麦麦使用联网搜索工具**：开启后 Planner/Replyer 可调用 `mai_life_web_search` 查询近期事实、未知知识和资料来源；工具不直接发送消息、不自动创建主动契机，查询前会清除 QQ 号、自动昵称和群名称；
 - **失败重试次数**：宿主搜索失败时按次数短退避重试（默认 3 次），仍失败记录历史并返回明确说明；
-- **记录搜索历史**：本地留痕每次逻辑搜索的查询词与结果摘要（可在 WebUI「见闻与搜索」页查看），可关闭。
+- **记录搜索历史**：本地留痕每次逻辑搜索的查询词与结果摘要（可在 WebUI「记忆与牵挂→联网见闻与搜索」查看），可关闭。
 
 新闻阅读与主动搜索默认各每天 1 次，由麦麦根据人格自主规划想了解的主题；每日次数失败或空结果也计入，避免持续请求；模型不可用时新闻与主动搜索会跳过而不会退化为硬编码词条，搜索失败时保留旧缓存，不生成虚假见闻。新闻正文与网页读取经宿主 `web.fetch` 完成。
 
@@ -163,7 +153,7 @@ v1.24.0 起联网全部走 MaiBot 主程序的统一联网服务（`ctx.web.sear
 
 ### 消息体验
 
-- v1.24.0 起插件不再做消息收口防抖：连发合并由 MaiBot 主程序内置防抖（natural 档）接管，插件层直接放行，回复更快。
+- 连发合并与撤回处理由 MaiBot 主程序接管，插件不重复提供消息防抖与撤回增强。
 - 同轮回复防重：同一最终消息只允许一次独立 Replyer 回复（群聊轮次按“平台 + 群 QQ 号 + 发送者 QQ 号”隔离，可在「群聊设置→群聊轮次注册」关闭）；正常分段不受影响。
 
 ### 主动与社交
@@ -187,9 +177,9 @@ v1.24.0 起联网全部走 MaiBot 主程序的统一联网服务（`ctx.web.sear
 | 项目 | 影响 |
 | --- | --- |
 | 响应延迟 | 消息路径不联网校时、不调用判醒模型；群聊仅做一次本地概率判断。首次启动校时最多等待约 12 秒。 |
-| Token | 日程、场景、日记、连续话题和回复上下文会增加模型调用或 Prompt 长度；新闻批量整理、自我关联和自定义联网模型会进一步消耗 Token。初步测量，平均会增加1M及以上的token消耗 |
+| Token | 日程、场景、日记、连续话题和回复上下文会增加模型调用或 Prompt 长度；新闻整理、见闻关联、创作和主动判断也会消耗 Token。实际用量取决于模型、用户数量、开关与频率，可在 WebUI 查看统计。 |
 | 联网与费用 | 联网走主程序统一服务，次数限制见插件「联网」节（新闻/主动搜索默认各每天 1 次，联网工具不设上限）；费用与配额以主程序所配服务的计费为准。 |
-| 存储 | SQLite 保存生活、关系、摘要、作品、Key 健康指纹和调用统计；不保存搜索原始 Key 和图片二进制。TOML 中的 Key 与书柜明文需要限制文件权限。 |
+| 存储与隐私 | SQLite 保存生活、QQ 关系资料、摘要、重要日期、作品、搜索历史和调用统计，不保存图片二进制。作品和私人文本为明文，需限制数据目录权限；搜索历史可关闭，群观察只保留匿名短摘要。 |
 
 ## 指令
 
@@ -198,16 +188,20 @@ v1.24.0 起联网全部走 MaiBot 主程序的统一联网服务（`ctx.web.sear
 | `/麦麦`、`/麦麦帮助` | 返回纯文本指令菜单；未识别指令也会落进同一菜单 |
 | `/麦麦状态` | 查看生活、消息管线、联网和后台任务状态 |
 | `/麦麦配置` | 查看配置摘要 |
-| `/麦麦添加日期`、`/麦麦删除日期`、`/麦麦确认日期` | 管理当前用户的重要日期，需要启用用户档案 |
-| `/麦麦立即创作` | 手动触发一次书柜创作 |
+| `/麦麦添加日期 YYYY-MM-DD 名称` | 添加当前用户的重要日期，需要启用用户档案 |
+| `/麦麦删除日期 编号`、`/麦麦确认日期 编号 [YYYY-MM-DD]` | 删除重要日期或确认日期候选，需要启用用户档案 |
+| `/麦麦立即创作` | 主人或管理员立即执行一次创作判断，仍需满足创作开关和明文存储确认 |
 | `/麦麦转述 群QQ号 内容` | 主人或管理员发起简单群转述 |
-| `/麦麦重生日程`、`/麦麦休息测试` | 重建日程；查看校准时间、来源与回复工作时段 |
+| `/麦麦重生日程`、`/麦麦休息测试` | 主人或管理员重建日程；查看校准时间、来源与回复工作时段 |
 
 所有指令仅允许在私聊中使用。启用用户档案的 QQ 可使用个人功能；管理员 QQ 可直接使用菜单和诊断类功能。管理员、主人和用户身份始终只按 QQ 号判断。
 
-当前指令集为以上 11 条；日程、关系、日记、日期、联网见闻、书柜和用量统计通过 MaiBot WebUI 的三个页面查看。输入已移除的查询指令（含 `/mai_*` 英文别名）会落进未识别兜底并显示菜单，不会报错。
+当前有以上 11 条公开指令；保留对应的 `/mai_*` 英文兼容入口。日程、关系、日记、日期、联网见闻、书柜和用量统计通过 MaiBot WebUI 的三个页面查看；已移除的旧查询指令会显示菜单。
+
+## 开发与接口
+
+运行 `python tools/build_plugin.py` 校验发布文件并打包。插件通过 `maibot.schedule` v1 提供全局日程快照与时间线，接入方式见[日程提供方接口](docs/schedule-provider-api.md)。
 
 ## 特别感谢
 
-感谢https://github.com/menglimi/astrbot_plugin_private_companion给与我想法
-感谢https://github.com/Blackwindy2333/Message_Debouncing_Refactored这个项目的消息防抖插件，给我的项目某个功能提供思路
+感谢 [astrbot_plugin_private_companion](https://github.com/menglimi/astrbot_plugin_private_companion) 提供的陪伴功能思路，以及 [Message_Debouncing_Refactored](https://github.com/Blackwindy2333/Message_Debouncing_Refactored) 提供的消息防抖设计参考。
