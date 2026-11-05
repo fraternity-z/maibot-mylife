@@ -497,7 +497,7 @@
       <span class="ml-tab-count" id="tab-cnt-dates">—</span>
     </button>
     <button type="button" class="ml-tab-btn" data-tab="memories">
-      <span>日记与梦境手账</span>
+      <span>日常手账</span>
       <span class="ml-tab-count" id="tab-cnt-memories">—</span>
     </button>
     <button type="button" class="ml-tab-btn" data-tab="shelf">
@@ -576,7 +576,7 @@
     </div>
   </section>
 
-  <!-- ==================== TAB 3: 日记与梦境手账 ==================== -->
+  <!-- ==================== TAB 3: 日常手账 ==================== -->
   <section id="panel-memories" class="ml-tab-panel ml-hidden">
     <div class="ml-kpi-row" id="memories-kpi-row"></div>
 
@@ -604,27 +604,6 @@
       </div>
     </div>
 
-    <!-- 梦境星空面板 -->
-    <div class="ml-card">
-      <div class="ml-card-header">
-        <h2 class="ml-card-title">近期梦境与潜意识碎片 (Dreams &amp; Fragments)</h2>
-        <span class="ml-badge" id="dream-latest-badge">最近梦境</span>
-      </div>
-      <div id="dream-latest-box" style="margin-bottom:16px;"></div>
-      <div class="ml-table-wrap">
-        <table class="ml-table">
-          <thead>
-            <tr>
-              <th>做梦时间</th>
-              <th>梦境叙事正文</th>
-              <th class="num">心情修正 (mood_delta)</th>
-              <th class="num">精力修正 (energy_delta)</th>
-            </tr>
-          </thead>
-          <tbody id="dreams-tbody"></tbody>
-        </table>
-      </div>
-    </div>
   </section>
 
   <!-- ==================== TAB 4: 麦麦书柜与创作 ==================== -->
@@ -938,15 +917,14 @@
     }).join('') : '<tr><td colspan="5" class="ml-empty">暂无待确认的日期候选</td></tr>';
   }
 
-  // ==================== 3. Render Memories (Diaries & Dreams) ====================
+  // ==================== 3. Render Diaries ====================
   function renderMemories() {
     const d = state.memories;
     if (!d) return;
-    document.getElementById('tab-cnt-memories').textContent = `${(d.diary_count ?? 0) + (d.dream_count ?? 0)}`;
+    document.getElementById('tab-cnt-memories').textContent = `${d.diary_count ?? 0}`;
     document.getElementById('memories-kpi-row').innerHTML = `
       <div class="ml-kpi-tile"><div class="ml-kpi-label">近期日记篇数</div><div class="ml-kpi-value">${d.diary_count ?? 0}</div></div>
       <div class="ml-kpi-tile"><div class="ml-kpi-label">最新日记所属日</div><div class="ml-kpi-value">${esc(d.last_diary_day || '暂无')}</div></div>
-      <div class="ml-kpi-tile"><div class="ml-kpi-label">近 30 天梦境次数</div><div class="ml-kpi-value">${d.dream_count ?? 0}</div></div>
     `;
 
     const diaries = d.diaries || [];
@@ -963,7 +941,6 @@
         <button type="button" class="ml-item-row ${idx === state.selectedDiaryIdx ? 'active' : ''}" data-diary-idx="${idx}">
           <div style="display:flex;justify-content:space-between;width:100%;font-size:11.5px;color:var(--ml-muted);">
             <span style="font-family:var(--ml-font-mono);">${esc(item.day)}</span>
-            <span>${esc(item.mood_summary || '平静')}</span>
           </div>
           <div style="font-weight:650;font-size:13.5px;">${esc(item.title || '无题日记')}</div>
         </button>
@@ -973,7 +950,7 @@
       readerEl.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;">
           <h3 style="margin:0;font-size:18px;">${esc(cur.title || '无题日记')}</h3>
-          <span class="ml-badge">${esc(cur.day)} · 心情：${esc(cur.mood_summary || '—')}</span>
+          <span class="ml-badge">${esc(cur.day)}</span>
         </div>
         <div class="ml-reader-body">${esc(cur.content || '（无正文）')}</div>
       `;
@@ -986,37 +963,6 @@
       });
     }
 
-    // Latest Dream & Dream table
-    const ld = d.latest_dream || {};
-    const latestBox = document.getElementById('dream-latest-box');
-    if (ld.content) {
-      const frags = (ld.fragments || []).map((f) => `<span class="ml-badge">${esc(f)}</span>`).join(' ');
-      latestBox.innerHTML = `
-        <div style="padding:14px 16px;border-radius:var(--ml-radius);background:var(--ml-soft);border:1px solid var(--ml-border);">
-          <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-            <strong>最新梦境记录 (${fmtEpoch(ld.created_at)})</strong>
-            <div style="display:flex;gap:6px;">
-              <span class="ml-badge">心情修正 ${ld.mood_delta >= 0 ? '+' : ''}${Number(ld.mood_delta || 0).toFixed(2)}</span>
-              <span class="ml-badge">精力修正 ${ld.energy_delta >= 0 ? '+' : ''}${Number(ld.energy_delta || 0).toFixed(2)}</span>
-            </div>
-          </div>
-          <div style="font-size:13.5px;line-height:1.65;white-space:pre-wrap;">${esc(ld.content)}</div>
-          ${frags ? `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;"><span style="font-size:11.5px;color:var(--ml-muted);">潜意识碎片：</span>${frags}</div>` : ''}
-        </div>
-      `;
-    } else {
-      latestBox.innerHTML = '';
-    }
-
-    const dreams = (d.dreams || []).slice().reverse();
-    document.getElementById('dreams-tbody').innerHTML = dreams.length ? dreams.map((dr) => `
-      <tr>
-        <td style="font-family:var(--ml-font-mono);white-space:nowrap;">${fmtEpoch(dr.created_at)}</td>
-        <td style="white-space:pre-wrap;line-height:1.55;">${esc(dr.content)}</td>
-        <td class="num">${dr.mood_delta >= 0 ? '+' : ''}${Number(dr.mood_delta || 0).toFixed(2)}</td>
-        <td class="num">${dr.energy_delta >= 0 ? '+' : ''}${Number(dr.energy_delta || 0).toFixed(2)}</td>
-      </tr>
-    `).join('') : '<tr><td colspan="4" class="ml-empty">近 30 天暂无梦境记录</td></tr>';
   }
 
   // ==================== 4. Render Bookshelf ====================
@@ -1178,7 +1124,7 @@
     const errors = await runQueriesWithLimit([
       { name: 'users', label: '用户关系', onSuccess: (r) => { state.users = r; renderUsers(); } },
       { name: 'dates', label: '重要日期', onSuccess: (r) => { state.dates = r; renderDates(); } },
-      { name: 'memories', label: '日记梦境', onSuccess: (r) => { state.memories = r; renderMemories(); } },
+      { name: 'memories', label: '日常手账', onSuccess: (r) => { state.memories = r; renderMemories(); } },
       { name: 'shelf', label: '麦麦书柜', onSuccess: (r) => { state.shelf = r; renderShelf(); } },
       { name: 'digest', label: '联网见闻', onSuccess: (r) => { state.digest = r; renderDigest(); } },
     ], 2);

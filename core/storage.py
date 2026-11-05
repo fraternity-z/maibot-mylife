@@ -13,20 +13,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 # 长期运行记录（互动、主动事件、契机、转述候选/事件、跳过统计）的保留天数。
 # 这些表没有过期字段驱动的外部清理，超期行必须在 cleanup_runtime_records 中删除，
 # 否则只会无限增长；pending 与在途行永远保留，避免打断正在结算的引用。
 RECORD_RETENTION_DAYS = 90
-# 心情事件规则：kind -> (每次幅度, 每日上限次数)。让心情对真实互动有响应，
-# 上限保证重度聊天日也不会把心情顶满。
-MOOD_EVENT_RULES = {
-    "passive_reply": (0.02, 3),
-    "proactive_reply": (0.03, 2),
-    "creation_archived": (0.05, 1),
-}
-# 心情事件与状态快照的保留天数：这是动力学分析的数据源，比运行记录保留更久。
-STATE_HISTORY_RETENTION_DAYS = 180
 
 
 class LifeStore:
@@ -160,41 +151,21 @@ class LifeStore:
         self.conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            -- 全局生活时间线、睡眠、梦境、日程和主动契机。
+            -- 全局生活活动、日程和主动契机。
             CREATE TABLE IF NOT EXISTS global_state(
-              id INTEGER PRIMARY KEY CHECK(id=1), energy REAL NOT NULL, hunger REAL NOT NULL,
-              mood_valence REAL NOT NULL, mood_arousal REAL NOT NULL,
-              health_status TEXT NOT NULL, health_note TEXT NOT NULL,
-              sleep_phase TEXT NOT NULL, current_location TEXT NOT NULL,
-              current_activity TEXT NOT NULL, body_cycle TEXT NOT NULL,
+              id INTEGER PRIMARY KEY CHECK(id=1), current_location TEXT NOT NULL,
+              current_activity TEXT NOT NULL,
               last_updated_at REAL NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS sleep_runtime(
-              id INTEGER PRIMARY KEY CHECK(id=1), phase TEXT NOT NULL,
-              started_at REAL NOT NULL, awake_grace_until REAL NOT NULL DEFAULT 0,
-              woken_count INTEGER NOT NULL DEFAULT 0, last_event TEXT NOT NULL DEFAULT '',
-              sleep_defer_until REAL NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS dreams(
-              id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
-              content TEXT NOT NULL, mood_delta REAL NOT NULL DEFAULT 0,
-              energy_delta REAL NOT NULL DEFAULT 0, sleep_started_at REAL NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS dream_fragments(
-              id INTEGER PRIMARY KEY AUTOINCREMENT, dream_id INTEGER NOT NULL,
-              position INTEGER NOT NULL, content TEXT NOT NULL,
-              UNIQUE(dream_id,position)
             );
             CREATE TABLE IF NOT EXISTS daily_framework(
               id TEXT PRIMARY KEY, day TEXT NOT NULL, start_minute INTEGER NOT NULL,
               end_minute INTEGER NOT NULL, kind TEXT NOT NULL, summary TEXT NOT NULL,
-              location TEXT NOT NULL, energy_load REAL NOT NULL, shareability REAL NOT NULL
+              location TEXT NOT NULL, shareability REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_framework_day ON daily_framework(day,start_minute);
             CREATE TABLE IF NOT EXISTS detailed_scenes(
               framework_id TEXT PRIMARY KEY, scene TEXT NOT NULL,
-              state_deltas TEXT NOT NULL, created_at REAL NOT NULL,
-              applied INTEGER NOT NULL DEFAULT 0,
+              created_at REAL NOT NULL,
               FOREIGN KEY(framework_id) REFERENCES daily_framework(id)
             );
             CREATE TABLE IF NOT EXISTS proactive_opportunities(
@@ -205,7 +176,7 @@ class LifeStore:
               consumed_at REAL NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_opportunity_active ON proactive_opportunities(expires_at,consumed_at);
-            -- 用户关系、互动、主动发送、休息积压和环境缓存。
+            -- 用户关系、互动、主动发送和环境缓存。
             CREATE TABLE IF NOT EXISTS users(
               user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, proactive_enabled INTEGER NOT NULL,
               display_name TEXT NOT NULL, temperature REAL NOT NULL,
@@ -235,37 +206,17 @@ class LifeStore:
               count INTEGER NOT NULL DEFAULT 0,
               PRIMARY KEY(user_id,reason,day)
             );
-            -- 心情事件流与逐小时状态快照：互动加分的账本和长期动力学分析的数据源。
-            CREATE TABLE IF NOT EXISTS mood_events(
-              id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
-              day TEXT NOT NULL, kind TEXT NOT NULL, delta REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_mood_events_day ON mood_events(day,kind);
-            CREATE TABLE IF NOT EXISTS state_snapshots(
-              ts REAL PRIMARY KEY, energy REAL NOT NULL, hunger REAL NOT NULL,
-              mood_valence REAL NOT NULL, mood_arousal REAL NOT NULL,
-              sleep_phase TEXT NOT NULL, current_activity TEXT NOT NULL DEFAULT ''
-            );
-            CREATE TABLE IF NOT EXISTS rest_backlogs(
-              id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
-              created_at REAL NOT NULL, summary TEXT NOT NULL, consumed INTEGER NOT NULL DEFAULT 0,
-              source_message_id TEXT NOT NULL DEFAULT ''
-            );
             CREATE TABLE IF NOT EXISTS weather_cache(
               id INTEGER PRIMARY KEY CHECK(id=1), fetched_at REAL NOT NULL,
               location_name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL,
               temperature REAL, weather_code INTEGER, description TEXT NOT NULL,
               raw_json TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS wake_candidates(
-              session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, message_id TEXT NOT NULL,
-              reason TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS conversation_continuity(
               user_id TEXT PRIMARY KEY, intent TEXT NOT NULL DEFAULT '',
               unresolved_topics TEXT NOT NULL DEFAULT '[]', updated_at REAL NOT NULL DEFAULT 0
             );
-            -- 模型统计、回复防重和撤回关联使用短期运行记录。
+            -- 模型统计和回复防重使用短期运行记录。
             CREATE TABLE IF NOT EXISTS llm_usage_events(
               id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
               source TEXT NOT NULL, task_name TEXT NOT NULL, model_name TEXT NOT NULL,
@@ -286,17 +237,6 @@ class LifeStore:
             );
             CREATE INDEX IF NOT EXISTS idx_message_turn_source
               ON message_turn_sources(session_id,source_message_id,expires_at);
-            CREATE TABLE IF NOT EXISTS recall_events(
-              session_id TEXT NOT NULL, recalled_message_id TEXT NOT NULL,
-              user_id TEXT NOT NULL DEFAULT '', operator_id TEXT NOT NULL DEFAULT '',
-              group_id TEXT NOT NULL DEFAULT '', notice_type TEXT NOT NULL,
-              source_adapter TEXT NOT NULL DEFAULT 'unknown', summary TEXT NOT NULL DEFAULT '',
-              summary_expires_at REAL NOT NULL DEFAULT 0,
-              media_types TEXT NOT NULL DEFAULT '[]', created_at REAL NOT NULL, expires_at REAL NOT NULL,
-              PRIMARY KEY(session_id,recalled_message_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_recall_event_expiry
-              ON recall_events(session_id,expires_at);
             -- 日记、重要日期和联网见闻只保存结构化摘要，不复制完整聊天历史。
             CREATE TABLE IF NOT EXISTS diary_entries(
               day TEXT PRIMARY KEY, created_at REAL NOT NULL, title TEXT NOT NULL,
@@ -464,19 +404,13 @@ class LifeStore:
         self._ensure_column("proactive_events", "host_task_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("relay_candidates", "host_task_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("interaction_events", "source_message_id", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("rest_backlogs", "source_message_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("important_dates", "source_message_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("date_candidates", "source_message_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("group_observations", "source_message_ids", "TEXT NOT NULL DEFAULT '[]'")
-        self._ensure_column("recall_events", "summary_expires_at", "REAL NOT NULL DEFAULT 0")
         self._ensure_column("group_user_activity", "source_message_id", "TEXT NOT NULL DEFAULT ''")
-        # 状态表同样可能缺列（旧库没有 mood_arousal/body_cycle 等）；缺列时末尾的
-        # 种子 INSERT 会失败并被误判为库不兼容而整库重置，必须先补列。
-        self._ensure_column("global_state", "mood_arousal", "REAL NOT NULL DEFAULT 0.65")
-        self._ensure_column("global_state", "body_cycle", "TEXT NOT NULL DEFAULT '未启用'")
-        self._ensure_column("sleep_runtime", "awake_grace_until", "REAL NOT NULL DEFAULT 0")
-        self._ensure_column("sleep_runtime", "woken_count", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column("sleep_runtime", "last_event", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("global_state", "current_location", "TEXT NOT NULL DEFAULT '家里'")
+        self._ensure_column("global_state", "current_activity", "TEXT NOT NULL DEFAULT '自由活动'")
+        self._ensure_column("global_state", "last_updated_at", "REAL NOT NULL DEFAULT 0")
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_proactive_host_task ON proactive_events(host_task_id,status)"
         )
@@ -509,25 +443,16 @@ class LifeStore:
             self._migrate_to_v11()
         if version < 12:
             self._migrate_to_v12()
-        if version < 13:
-            self._migrate_to_v13()
-        if version < 14:
-            self._migrate_to_v14()
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",(str(SCHEMA_VERSION),))
-        now = self.clock()
-        self.conn.execute(
-            """INSERT OR IGNORE INTO global_state
-            (id,energy,hunger,mood_valence,mood_arousal,health_status,health_note,
-             sleep_phase,current_location,current_activity,body_cycle,last_updated_at)
-            VALUES(1,70,20,0,0.65,'normal','状态正常','awake','家里','自由活动','未启用',?)""",
-            (now,),
-        )
-        self.conn.execute(
-            """INSERT OR IGNORE INTO sleep_runtime
-            (id,phase,started_at,awake_grace_until,woken_count,last_event)
-            VALUES(1,'awake',?,0,0,'初始化')""",
-            (now,),
-        )
+        if not self.conn.execute("SELECT id FROM global_state WHERE id=1").fetchone():
+            seed={"id":1,"current_location":"家里","current_activity":"自由活动","last_updated_at":self.clock()}
+            # 旧库的废弃非空列原样保留；空库补种时仅填中性值，避免触发整库重建。
+            for column in self.conn.execute("PRAGMA table_info(global_state)"):
+                if column[1] not in seed and column[3] and column[4] is None:
+                    seed[column[1]]="" if str(column[2]).upper()=="TEXT" else 0
+            columns=",".join('"'+name.replace('"','""')+'"' for name in seed)
+            marks=",".join("?" for _ in seed)
+            self.conn.execute(f"INSERT INTO global_state({columns}) VALUES({marks})",tuple(seed.values()))
         self.conn.execute("INSERT OR IGNORE INTO memory_runtime(id) VALUES(1)")
         self.conn.commit()
 
@@ -587,26 +512,6 @@ class LifeStore:
                 )"""
             )
 
-    def _migrate_to_v13(self) -> None:
-        """v13 新增心情事件流与逐小时状态快照表；均为幂等新建，不改动任何旧数据（含书柜）。"""
-        with self._tx() as conn:
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS mood_events(
-                id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
-                day TEXT NOT NULL, kind TEXT NOT NULL, delta REAL NOT NULL)"""
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mood_events_day ON mood_events(day,kind)")
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS state_snapshots(
-                ts REAL PRIMARY KEY, energy REAL NOT NULL, hunger REAL NOT NULL,
-                mood_valence REAL NOT NULL, mood_arousal REAL NOT NULL,
-                sleep_phase TEXT NOT NULL, current_activity TEXT NOT NULL DEFAULT '')"""
-            )
-
-    def _migrate_to_v14(self) -> None:
-        """v14 为睡眠相位增加睡前推迟点；幂等补列，不改动任何旧数据（含书柜）。"""
-        self._ensure_column("sleep_runtime","sleep_defer_until","REAL NOT NULL DEFAULT 0")
-
     def _ensure_column(self, table: str, column: str, declaration: str) -> None:
         """幂等补充 SQLite 列，避免测试阶段升级时覆盖已有生活数据。"""
         columns = {str(row[1]) for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -622,141 +527,18 @@ class LifeStore:
 
     async def get_state(self) -> dict[str, Any]:
         async with self._lock:
-            row = self.conn.execute("SELECT * FROM global_state WHERE id=1").fetchone()
+            row = self.conn.execute(
+                "SELECT current_location,current_activity,last_updated_at FROM global_state WHERE id=1"
+            ).fetchone()
             return dict(row) if row else {}
 
     async def save_state(self, state: dict[str, Any]) -> None:
         async with self._lock:
             with self._tx() as conn:
                 conn.execute(
-                    """UPDATE global_state SET energy=?,hunger=?,mood_valence=?,mood_arousal=?,
-                    health_status=?,health_note=?,sleep_phase=?,current_location=?,current_activity=?,
-                    body_cycle=?,last_updated_at=? WHERE id=1""",
-                    tuple(state[k] for k in (
-                        "energy","hunger","mood_valence","mood_arousal","health_status",
-                        "health_note","sleep_phase","current_location","current_activity",
-                        "body_cycle","last_updated_at"
-                    )),
+                    """UPDATE global_state SET current_location=?,current_activity=?,last_updated_at=? WHERE id=1""",
+                    tuple(state[k] for k in ("current_location","current_activity","last_updated_at")),
                 )
-
-    # 心情事件：单条 SQL 原子加分，避免与状态推进的读改写竞争；当日次数超限直接跳过。
-    async def record_mood_event(self, kind: str, now: Any) -> float:
-        """记录一次心情事件并原子加分，返回实际加分值；超过当日上限或规则缺失返回 0.0。
-
-        now 使用环境时区的 datetime，day 归属与跳过统计保持一致。
-        只更新 mood_valence，不触碰 last_updated_at，避免干扰状态推进的时间游标。
-        """
-        rule = MOOD_EVENT_RULES.get(str(kind or ""))
-        if not rule:
-            return 0.0
-        delta, cap = float(rule[0]), max(0, int(rule[1]))
-        day = now.strftime("%Y-%m-%d")
-        async with self._lock:
-            with self._tx() as conn:
-                count = conn.execute(
-                    "SELECT COUNT(*) FROM mood_events WHERE kind=? AND day=?", (kind, day)
-                ).fetchone()[0]
-                if count >= cap:
-                    return 0.0
-                conn.execute(
-                    "INSERT INTO mood_events(created_at,day,kind,delta) VALUES(?,?,?,?)",
-                    (float(now.timestamp()), day, kind[:32], delta),
-                )
-                conn.execute(
-                    "UPDATE global_state SET mood_valence=MAX(-1.0,MIN(1.0,mood_valence+?)) WHERE id=1",
-                    (delta,),
-                )
-                return delta
-
-    # 逐小时状态快照：主键按整点取整天然幂等，运行期间每小时留下一条轨迹。
-    async def save_state_snapshot(self, ts: float, state: dict[str, Any]) -> None:
-        bucket = float(int(float(ts) // 3600) * 3600)
-        async with self._lock:
-            self.conn.execute(
-                """INSERT OR IGNORE INTO state_snapshots
-                (ts,energy,hunger,mood_valence,mood_arousal,sleep_phase,current_activity)
-                VALUES(?,?,?,?,?,?,?)""",
-                (bucket, float(state.get("energy") or 0), float(state.get("hunger") or 0),
-                 float(state.get("mood_valence") or 0), float(state.get("mood_arousal") or 0),
-                 str(state.get("sleep_phase") or "")[:32], str(state.get("current_activity") or "")[:120]),
-            )
-            self.conn.commit()
-
-    # 只读轨迹查询：WebUI 历史曲线按小时桶升序读取最近窗口，不做任何写入。
-    async def recent_state_snapshots(self, now: float, hours: int = 72) -> list[dict[str, Any]]:
-        """返回 [now-hours*3600, now] 内的状态快照，按 ts 升序；无数据返回空列表。
-
-        now 为环境时区对应的 epoch 秒；窗口上限收敛到 30 天，防止调用方误传放大查询。
-        """
-        span = max(1, min(24 * 30, int(hours))) * 3600
-        end = float(now)
-        async with self._lock:
-            rows = self.conn.execute(
-                """SELECT ts,energy,hunger,mood_valence,mood_arousal,sleep_phase
-                FROM state_snapshots WHERE ts>=? AND ts<=? ORDER BY ts ASC""",
-                (end - span, end),
-            ).fetchall()
-            return [dict(row) for row in rows]
-
-    async def get_sleep_runtime(self) -> dict[str, Any]:
-        async with self._lock:
-            row = self.conn.execute("SELECT * FROM sleep_runtime WHERE id=1").fetchone()
-            return dict(row) if row else {}
-
-    async def save_sleep_runtime(self, runtime: dict[str, Any]) -> None:
-        async with self._lock:
-            with self._tx() as conn:
-                conn.execute(
-                    """UPDATE sleep_runtime SET phase=?,started_at=?,awake_grace_until=?,
-                    woken_count=?,last_event=?,sleep_defer_until=? WHERE id=1""",
-                    (runtime["phase"],runtime["started_at"],runtime.get("awake_grace_until",0),
-                     runtime.get("woken_count",0),runtime.get("last_event",""),
-                     runtime.get("sleep_defer_until",0)),
-                )
-
-    async def add_dream(self, content: str, mood_delta: float, energy_delta: float,
-                        sleep_started_at: float, fragments: list[str] | None = None,
-                        created_at: float = 0) -> int:
-        async with self._lock:
-            with self._tx() as conn:
-                cursor=conn.execute(
-                    "INSERT INTO dreams(created_at,content,mood_delta,energy_delta,sleep_started_at) VALUES(?,?,?,?,?)",
-                    (created_at or self.clock(), content[:1000], mood_delta, energy_delta, sleep_started_at),
-                )
-                dream_id=int(cursor.lastrowid)
-                clean=[str(item).strip()[:300] for item in (fragments or []) if str(item).strip()][:5]
-                conn.executemany(
-                    "INSERT INTO dream_fragments(dream_id,position,content) VALUES(?,?,?)",
-                    [(dream_id,index,item) for index,item in enumerate(clean)],
-                )
-                return dream_id
-
-    async def latest_dream(self) -> dict[str, Any]:
-        async with self._lock:
-            # 同秒入库的梦境按 id 决胜，保证 latest_dream 稳定返回最新一条。
-            row = self.conn.execute("SELECT * FROM dreams ORDER BY created_at DESC, id DESC LIMIT 1").fetchone()
-            if not row:return {}
-            data=dict(row)
-            fragments=self.conn.execute(
-                "SELECT content FROM dream_fragments WHERE dream_id=? ORDER BY position",(data["id"],)
-            ).fetchall()
-            data["fragments"]=[str(item[0]) for item in fragments]
-            return data
-
-    async def dreams_between(self, start: float, end: float) -> list[dict[str, Any]]:
-        async with self._lock:
-            rows=self.conn.execute(
-                "SELECT * FROM dreams WHERE created_at>=? AND created_at<? ORDER BY created_at",(start,end)
-            ).fetchall()
-            result=[]
-            for row in rows:
-                data=dict(row)
-                fragments=self.conn.execute(
-                    "SELECT content FROM dream_fragments WHERE dream_id=? ORDER BY position",(data["id"],)
-                ).fetchall()
-                data["fragments"]=[str(item[0]) for item in fragments]
-                result.append(data)
-            return result
 
     # 替换日程时同步清理旧场景和机会，避免旧节点继续触发。
     async def replace_framework(self, day: str, nodes: list[dict[str, Any]]) -> None:
@@ -768,25 +550,34 @@ class LifeStore:
                     conn.execute(f"DELETE FROM proactive_opportunities WHERE framework_id IN ({marks})", old_ids)
                     conn.execute(f"DELETE FROM detailed_scenes WHERE framework_id IN ({marks})", old_ids)
                 conn.execute("DELETE FROM daily_framework WHERE day=?", (day,))
+                columns="id,day,start_minute,end_minute,kind,summary,location,shareability"
+                values=":"+",:".join(columns.split(","))
+                # 旧日程表的废弃列没有默认值，写入中性值兼容已有数据库。
+                if "energy_load" in {row[1] for row in conn.execute("PRAGMA table_info(daily_framework)")}:
+                    columns+=",energy_load"; values+=",0"
                 conn.executemany(
-                    """INSERT INTO daily_framework(id,day,start_minute,end_minute,kind,summary,location,energy_load,shareability)
-                    VALUES(:id,:day,:start_minute,:end_minute,:kind,:summary,:location,:energy_load,:shareability)""",
+                    f"INSERT INTO daily_framework({columns}) VALUES({values})",
                     nodes,
                 )
 
     async def get_framework(self, day: str) -> list[dict[str, Any]]:
         async with self._lock:
             rows = self.conn.execute(
-                "SELECT * FROM daily_framework WHERE day=? ORDER BY start_minute", (day,)
+                """SELECT id,day,start_minute,end_minute,kind,summary,location,shareability
+                FROM daily_framework WHERE day=? ORDER BY start_minute""", (day,)
             ).fetchall()
             return [dict(r) for r in rows]
 
-    async def save_scene(self, framework_id: str, scene: str, deltas: dict[str, Any], opportunities: list[dict[str, Any]]) -> None:
+    async def save_scene(self, framework_id: str, scene: str, opportunities: list[dict[str, Any]]) -> None:
         async with self._lock:
             with self._tx() as conn:
+                columns="framework_id,scene,created_at"; values="?,?,?"
+                # 旧场景表保留其余列，状态增量不再参与生活逻辑。
+                if "state_deltas" in {row[1] for row in conn.execute("PRAGMA table_info(detailed_scenes)")}:
+                    columns+=",state_deltas"; values+=",'{}'"
                 conn.execute(
-                    "INSERT OR REPLACE INTO detailed_scenes(framework_id,scene,state_deltas,created_at,applied) VALUES(?,?,?,?,0)",
-                    (framework_id, scene, json.dumps(deltas, ensure_ascii=False), self.clock()),
+                    f"INSERT OR REPLACE INTO detailed_scenes({columns}) VALUES({values})",
+                    (framework_id, scene, self.clock()),
                 )
                 for item in opportunities:
                     conn.execute(
@@ -798,32 +589,25 @@ class LifeStore:
 
     async def get_scene(self, framework_id: str) -> dict[str, Any]:
         async with self._lock:
-            row = self.conn.execute("SELECT * FROM detailed_scenes WHERE framework_id=?", (framework_id,)).fetchone()
-            if not row:
-                return {}
-            data = dict(row)
-            data["state_deltas"] = json.loads(data.get("state_deltas") or "{}")
-            return data
+            row = self.conn.execute(
+                "SELECT framework_id,scene,created_at FROM detailed_scenes WHERE framework_id=?", (framework_id,)
+            ).fetchone()
+            return dict(row) if row else {}
 
     async def get_scenes_by_framework_ids(self, framework_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
-        """按框架 ID 批量读取细化场景，消除多日时间线逐节点查询的 N+1。"""
+        """按框架 ID 批量读取细化场景，供日程查询复用。"""
         ids=[str(framework_id) for framework_id in framework_ids if str(framework_id)]
         result={framework_id:{} for framework_id in dict.fromkeys(ids)}
         if not ids:return result
         marks=",".join("?" for _ in ids)
         async with self._lock:
             rows=self.conn.execute(
-                f"SELECT * FROM detailed_scenes WHERE framework_id IN ({marks})", ids,
+                f"SELECT framework_id,scene,created_at FROM detailed_scenes WHERE framework_id IN ({marks})", ids,
             ).fetchall()
             for row in rows:
-                data=dict(row); data["state_deltas"]=json.loads(data.get("state_deltas") or "{}")
+                data=dict(row)
                 result[str(data["framework_id"])]=data
         return result
-
-    async def mark_scene_applied(self, framework_id: str) -> None:
-        async with self._lock:
-            self.conn.execute("UPDATE detailed_scenes SET applied=1 WHERE framework_id=?", (framework_id,))
-            self.conn.commit()
 
     async def add_opportunity(self, item: dict[str, Any]) -> bool:
         async with self._lock:
@@ -839,7 +623,8 @@ class LifeStore:
     async def active_opportunities(self, now: float) -> list[dict[str, Any]]:
         async with self._lock:
             rows = self.conn.execute(
-                "SELECT * FROM proactive_opportunities WHERE consumed_at=0 AND expires_at>? ORDER BY weight DESC",
+                """SELECT * FROM proactive_opportunities
+                WHERE consumed_at=0 AND expires_at>? AND framework_id NOT LIKE 'dream:%' ORDER BY weight DESC""",
                 (now,),
             ).fetchall()
             return [dict(r) for r in rows]
@@ -968,57 +753,6 @@ class LifeStore:
                 (user_id,self.clock()-max(0.0,float(within_days))*86400,limit),
             ).fetchall()
             return [str(row[0]) for row in reversed(rows) if str(row[0]).strip()]
-
-    @staticmethod
-    def _backlog_label(summary: str, created_at: float, now: float) -> str:
-        """积压摘要加相对时间，避免模型把几小时前的消息当成刚发生的。"""
-        hours=(now-float(created_at or 0))/3600
-        prefix=f"约{max(1,round(hours))}小时前：" if hours>=1 else ""
-        return prefix+str(summary or "")
-
-    async def add_rest_backlog(self, user_id: str, summary: str, now: float,
-                               source_message_id: str="") -> None:
-        async with self._lock:
-            self.conn.execute(
-                """INSERT INTO rest_backlogs
-                (user_id,created_at,summary,source_message_id) VALUES(?,?,?,?)""",
-                (user_id,now,summary[:240],source_message_id[:240]),
-            ); self.conn.commit()
-
-    async def consume_rest_backlogs(self, user_id: str) -> list[str]:
-        async with self._lock:
-            with self._tx() as conn:
-                rows=conn.execute("SELECT id,summary,created_at FROM rest_backlogs WHERE user_id=? AND consumed=0 ORDER BY created_at LIMIT 5",(user_id,)).fetchall()
-                if rows:
-                    conn.executemany("UPDATE rest_backlogs SET consumed=1 WHERE id=?",[(r[0],) for r in rows])
-                now=self.clock()
-                return [self._backlog_label(str(r[1]),float(r[2]),now) for r in rows]
-
-    async def peek_rest_backlogs(self, user_id: str) -> list[str]:
-        async with self._lock:
-            rows=self.conn.execute("SELECT summary,created_at FROM rest_backlogs WHERE user_id=? AND consumed=0 ORDER BY created_at LIMIT 5",(user_id,)).fetchall()
-            now=self.clock()
-            return [self._backlog_label(str(r[0]),float(r[1]),now) for r in rows]
-
-    # 批量版本使用窗口函数保留“每用户最多 3 条、按创建时间排序”的原有语义。
-    async def peek_rest_backlogs_batch(self, user_ids: Iterable[str]) -> dict[str, list[str]]:
-        """按 user_id 批量返回未消费休息积压，未消费积压为空时该用户返回空列表。"""
-        ids=list(dict.fromkeys(str(user_id) for user_id in user_ids if str(user_id)))
-        result={user_id:[] for user_id in ids}
-        if not ids:return result
-        marks=",".join("?" for _ in ids)
-        async with self._lock:
-            rows=self.conn.execute(
-                f"""SELECT user_id,summary,created_at FROM (
-                    SELECT user_id,summary,created_at,ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at) rn
-                    FROM rest_backlogs WHERE user_id IN ({marks}) AND consumed=0
-                ) WHERE rn<=5 ORDER BY user_id""",
-                ids,
-            ).fetchall()
-            now=self.clock()
-            for row in rows:
-                result[str(row[0])].append(self._backlog_label(str(row[1]),float(row[2]),now))
-        return result
 
     async def add_proactive_pending(self, event_id: str, user_id: str, opportunity_id: str, stream_id: str, now: float, expires_at: float) -> None:
         async with self._lock:
@@ -1211,44 +945,6 @@ class LifeStore:
                 (now,),
             ).fetchall()
             return {str(row[0]) for row in rows if str(row[0] or "")}
-
-    async def set_wake_candidate(self, session_id: str, user_id: str, message_id: str, reason: str, now: float, expires_at: float) -> None:
-        async with self._lock:
-            self.conn.execute(
-                """INSERT OR REPLACE INTO wake_candidates
-                (session_id,user_id,message_id,reason,created_at,expires_at) VALUES(?,?,?,?,?,?)""",
-                (session_id,user_id,message_id,reason[:240],now,expires_at),
-            )
-            self.conn.commit()
-
-    async def pop_wake_candidate(self, session_id: str, now: float, message_id: str = "") -> dict[str, Any]:
-        """只有真实发送时消费待醒候选；普通发送只执行一次只读查询。"""
-        async with self._lock:
-            if message_id:
-                row=self.conn.execute(
-                    "SELECT * FROM wake_candidates WHERE session_id=? AND message_id=? AND expires_at>?",
-                    (session_id,message_id,now),
-                ).fetchone()
-            else:
-                row=self.conn.execute(
-                    "SELECT * FROM wake_candidates WHERE session_id=? AND expires_at>?",
-                    (session_id,now),
-                ).fetchone()
-            if not row:
-                self.conn.execute("DELETE FROM wake_candidates WHERE session_id=? AND expires_at<=?",(session_id,now))
-                self.conn.commit()
-                return {}
-            with self._tx() as conn:
-                conn.execute("DELETE FROM wake_candidates WHERE session_id=? AND message_id=?",(session_id,row["message_id"]))
-            return dict(row)
-
-    async def clear_wake_candidate(self, session_id: str, message_id: str = "") -> None:
-        async with self._lock:
-            if message_id:
-                self.conn.execute("DELETE FROM wake_candidates WHERE session_id=? AND message_id=?",(session_id,message_id))
-            else:
-                self.conn.execute("DELETE FROM wake_candidates WHERE session_id=?",(session_id,))
-            self.conn.commit()
 
     async def get_continuity(self, user_id: str) -> dict[str, Any]:
         async with self._lock:
@@ -1515,7 +1211,7 @@ class LifeStore:
     async def pending_creation_inspirations(self, now: float, limit: int=10) -> list[dict[str, Any]]:
         async with self._lock:
             rows=self.conn.execute(
-                """SELECT * FROM creation_inspirations WHERE status='pending' AND expires_at>?
+                """SELECT * FROM creation_inspirations WHERE status='pending' AND expires_at>? AND source_kind!='dream'
                 ORDER BY score DESC,created_at DESC LIMIT ?""",(now,max(1,min(100,int(limit))))
             ).fetchall()
             return [dict(row) for row in rows]
@@ -1793,16 +1489,8 @@ class LifeStore:
         """清理运行态记录；records_before 提供长期记录的保留截止时间，0 表示本轮跳过长期清理。"""
         async with self._lock:
             with self._tx() as conn:
-                conn.execute("DELETE FROM wake_candidates WHERE expires_at<=?",(now,))
-                # 休息积压按 7 天保留期清理，避免关闭增强或长期静默后无界堆积。
-                conn.execute("DELETE FROM rest_backlogs WHERE created_at<=?",(now-7*86400,))
                 conn.execute("DELETE FROM reply_turns WHERE expires_at<=?",(now,))
                 conn.execute("DELETE FROM message_turn_sources WHERE expires_at<=?",(now,))
-                conn.execute(
-                    "UPDATE recall_events SET summary='',media_types='[]',summary_expires_at=0 "
-                    "WHERE summary_expires_at>0 AND summary_expires_at<=?",(now,)
-                )
-                conn.execute("DELETE FROM recall_events WHERE expires_at<=?",(now,))
                 # 维护清理与 expire_pending 共用同一套过期逻辑（释放机会 + 记 planner_no_reply），
                 # 避免维护抢先时重试静默失效；_expire_pending_locked 是同步方法，不会重复取锁。
                 self._expire_pending_locked(conn, now, max(0, 2), day)
@@ -1830,10 +1518,6 @@ class LifeStore:
                     # 日期由调用方按配置时区传入；未传时兼容旧调用方。
                     day_cut=records_before_day or time.strftime("%Y-%m-%d",time.localtime(records_before))
                     conn.execute("DELETE FROM proactive_skip_stats WHERE day<?",(day_cut,))
-                    # 心情事件与状态快照是动力学分析数据源，保留期比运行记录更长。
-                    history_before=now-STATE_HISTORY_RETENTION_DAYS*86400
-                    conn.execute("DELETE FROM state_snapshots WHERE ts<=?",(history_before,))
-                    conn.execute("DELETE FROM mood_events WHERE created_at<=?",(history_before,))
 
     async def record_llm_usage(self, *, created_at: float, source: str, task_name: str, model_name: str,
                                request_type: str, prompt_tokens: int, completion_tokens: int,
@@ -1925,7 +1609,7 @@ class LifeStore:
     async def scenes_for_day(self, day: str) -> list[dict[str, Any]]:
         async with self._lock:
             rows=self.conn.execute(
-                """SELECT f.kind,f.summary,f.location,s.scene,s.applied
+                """SELECT f.kind,f.summary,f.location,s.scene
                 FROM daily_framework f LEFT JOIN detailed_scenes s ON s.framework_id=f.id
                 WHERE f.day=? ORDER BY f.start_minute""",(day,)
             ).fetchall()

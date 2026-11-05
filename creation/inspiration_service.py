@@ -33,13 +33,8 @@ class InspirationService:
         return text[:limit]
 
     async def collect(self,now:Any)->int:
-        """聚合近期梦境、日记、生活场景和可选外部阅读，使用稳定来源 ID 去重。"""
+        """聚合近期日记、生活场景和可选外部阅读，使用稳定来源 ID 去重。"""
         count=0; cutoff=now.timestamp()-int(self.config.creation.inspiration_lookback_days)*86400
-        dream=await self.store.latest_dream()
-        if dream and float(dream.get("created_at") or 0)>=cutoff:
-            fragments="；".join(str(item) for item in dream.get("fragments") or [])
-            count+=int(await self._add("dream",str(dream["id"]),
-                f"梦境余韵：{dream.get('content','')}；碎片：{fragments}","private",0.72,now))
         for diary in await self.store.list_diaries(int(self.config.creation.inspiration_lookback_days)):
             if float(diary.get("created_at") or 0)<cutoff:continue
             count+=int(await self._add("diary",str(diary["day"]),

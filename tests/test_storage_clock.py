@@ -35,23 +35,15 @@ class StorageClockTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_initial_state_and_fallback_timestamps_use_clock(self):
         self.assertEqual((await self.store.get_state())["last_updated_at"],self.now)
-        self.assertEqual((await self.store.get_sleep_runtime())["started_at"],self.now)
-        await self.store.add_dream("dream",0,0,self.now-3600)
-        self.assertEqual((await self.store.latest_dream())["created_at"],self.now)
         await self.store.cleanup_date_candidates(self.now-3600)
         row=self.store.conn.execute("SELECT last_cleanup_at FROM memory_runtime WHERE id=1").fetchone()
         self.assertEqual(row[0],self.now)
 
-    async def test_recent_interactions_and_backlog_age_ignore_server_clock(self):
+    async def test_recent_interactions_ignore_server_clock(self):
         await self.store.record_interaction("u","too old",self.now-7200,10)
         await self.store.record_interaction("u","recent",self.now-1800,11)
-        await self.store.add_rest_backlog("u","a message",self.now-3600)
         with patch.object(storage.time,"time",return_value=self.now+8*3600):
             self.assertEqual(await self.store.recent_interactions("u",within_days=1/24),["recent"])
-            self.assertEqual(await self.store.peek_rest_backlogs("u"),["约1小时前：a message"])
-            self.assertEqual(await self.store.peek_rest_backlogs_batch(["u"]),{"u":["约1小时前：a message"]})
-            self.assertEqual(await self.store.consume_rest_backlogs("u"),["约1小时前：a message"])
-            self.assertEqual(await self.store.consume_rest_backlogs("u"),[])
 
     async def test_first_interaction_day_uses_shanghai_date_across_utc_midnight(self):
         instant=datetime(2026,11,5,20,30,tzinfo=timezone.utc)

@@ -132,7 +132,7 @@ class AdminService:
             skip=data.get("skip_stats") if isinstance(data,dict) else []
             if skip:
                 labels={"quiet":"免打扰时段","interval":"主动最小间隔","silence":"用户刚发言","daily_limit":"每日额度用尽",
-                        "low_energy":"精力不足","low_score":"候选分不足","planner_no_reply":"Planner 沉默或超时"}
+                        "low_score":"候选分不足","planner_no_reply":"Planner 沉默或超时"}
                 lines.append("\n今日主动候选跳过原因")
                 lines.extend(f"{labels.get(item['reason'],item['reason'])}：{item['total']} 次" for item in skip)
         if len(lines)==1:lines.append("暂无记录。")

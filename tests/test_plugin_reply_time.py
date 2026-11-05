@@ -22,14 +22,13 @@ def plugin(plugin_module):
     instance.config.context.enabled=False
     instance.ctx=SimpleNamespace(logger=Mock())
     instance._get_logger=lambda:instance.ctx.logger
-    for name in ("_store","_llm","_state","_schedule","_proactive","_continuity","_memory",
-                 "_information","_group_observer","_relay","_bookshelf","_creation","_admin","_bedtime"):
+    for name in ("_store","_llm","_schedule","_proactive","_continuity","_memory",
+                 "_information","_group_observer","_relay","_bookshelf","_creation","_admin"):
         setattr(instance,name,AsyncMock())
     instance._store.get_user.return_value=None
-    instance._store.get_sleep_runtime.return_value={"phase":"awake"}
     instance._store.proactive_for_task.return_value={}
     instance._env=Mock(now=Mock(return_value=NOW))
-    instance._rest=plugin_module.RestGate(instance._store,instance.config,instance._llm,instance._state,instance.ctx.logger)
+    instance._rest=plugin_module.RestGate(instance.config)
     instance._activate_planner_task=AsyncMock(return_value=None)
     instance._cancel_reply_confirmations=AsyncMock()
     instance._cancel_group_confirmations=AsyncMock()
@@ -255,8 +254,6 @@ def test_later_segment_still_obeys_hours_after_first_send_consumes_confirmation(
     plugin._store.get_user.return_value=user
     plugin._user_by_session=AsyncMock(return_value=user)
     plugin._store.reserve_reply_turn.return_value=True
-    plugin._store.pop_wake_candidate.return_value={}
-    plugin._record_mood_event=AsyncMock()
     message=inbound()
     async def flow():
         await plugin.on_receive(message=message)
@@ -278,8 +275,8 @@ def test_config_reload_retains_group_reply_origin_and_applies_new_hours(plugin):
     plugin._maintenance_tick=AsyncMock()
     plugin._start_tasks=Mock()
     plugin._resolve_all_streams=AsyncMock()
-    for name in ("_llm","_state","_schedule","_proactive","_continuity","_memory","_information",
-                 "_group_observer","_relay","_bookshelf","_creation","_admin","_bedtime"):
+    for name in ("_llm","_schedule","_proactive","_continuity","_memory","_information",
+                 "_group_observer","_relay","_bookshelf","_creation","_admin"):
         getattr(plugin,name).update_config=Mock()
     message=inbound(group=True)
     async def flow():
@@ -303,9 +300,81 @@ def test_proactive_patrol_uses_private_work_window_without_random_draw(plugin_mo
     store.active_opportunities.return_value=[]
     engine=plugin_module.ProactiveEngine(Mock(),store,config,Mock(),Mock())
     with patch("mai_integration_tests.life.rest_gate.random.random",side_effect=AssertionError("proactive must not redraw")):
-        result=asyncio.run(engine.patrol(NOW.replace(hour=hour,minute=minute),{"sleep_phase":"awake","energy":100}))
+        result=asyncio.run(engine.patrol(NOW.replace(hour=hour,minute=minute)))
     assert result is False
     assert store.active_opportunities.await_count==int(checked_opportunities)
+
+
+@pytest.mark.parametrize("kind",["meal","nap","sleep","work"])
+def test_maintenance_updates_only_daily_activity_and_keeps_memory(plugin,kind):
+    plugin._schedule.ensure_day.return_value=[]
+    plugin._schedule.context.return_value={
+        "current":{"kind":kind,"summary":"日程活动","location":"家里"},
+        "scene":{"scene":"记录今天的小事"},
+    }
+    plugin._env.refresh_time=AsyncMock()
+    plugin._env.refresh_weather=AsyncMock(return_value={})
+    plugin._settle_relationships=AsyncMock()
+    asyncio.run(plugin._maintenance_tick(allow_weather_network=False))
+    plugin._store.save_state.assert_awaited_once_with({
+        "current_activity":"记录今天的小事","current_location":"家里","last_updated_at":NOW.timestamp(),
+    })
+    plugin._schedule.expand_due.assert_awaited_once_with(NOW,[],plugin._env.weather_text.return_value)
+    plugin._memory.ensure_daily.assert_awaited_once_with(NOW)
+    plugin._settle_relationships.assert_awaited_once_with(NOW)
+
+
+def test_daily_overview_memories_and_config_apis(plugin):
+    plugin._store.get_state.return_value={
+        "current_activity":"看书","current_location":"家里","last_updated_at":NOW.timestamp(),
+    }
+    plugin._store.get_weather.return_value={}
+    plugin._store.list_diaries.return_value=[{"day":"2026-11-04","title":"日常","content":"读了一本书"}]
+    plugin._store.memory_runtime.return_value={"last_diary_day":"2026-11-04"}
+    plugin._store.recent_group_observations.return_value=[]
+    plugin._store.recent_search_history.return_value=[]
+    plugin._schedule.context.return_value={"current":{"kind":"leisure","summary":"看书"}}
+    plugin._information.status.return_value={}
+    plugin._creation.status.return_value={}
+    plugin._llm.available_tasks=set()
+    plugin._llm.task_available=Mock(return_value=True)
+    plugin._env.snapshot.return_value={}
+    async def flow():
+        return await plugin.webui_status_overview(),await plugin.webui_memories(),await plugin.webui_config_summary()
+    overview,memories,config=asyncio.run(flow())
+    assert overview["state"]==plugin._store.get_state.return_value
+    assert "sleep" not in overview
+    assert memories["diary_count"]==1
+    assert "读了一本书" in memories["diaries_full_text"]
+    assert "dreams" not in memories and "latest_dream" not in memories
+    assert "error" not in config
+    assert "minimum_energy" not in config["creation"]
+    assert "minimum_energy" not in config["proactive"]
+
+
+def test_planner_and_replyer_inject_daily_context(plugin):
+    plugin.config.context.enabled=True
+    plugin._store.get_state.return_value={"current_activity":"整理读书笔记","current_location":"家里"}
+    plugin._store.get_weather.return_value={"description":"晴"}
+    plugin._store.get_continuity.return_value={}
+    plugin._schedule.context.return_value={"current":{"summary":"看书","kind":"leisure"}}
+    plugin._memory.context_for_user.return_value={}
+    plugin._information.context.return_value={}
+    plugin._bookshelf.context_for_user.return_value={}
+    plugin._env.snapshot.return_value={"media":["text"]}
+    plugin._user_by_session=AsyncMock(return_value={
+        "user_id":"12345","role":"owner","temperature":80,"display_name":"测试用户",
+    })
+    plugin._active_tasks.current=AsyncMock(return_value=None)
+    async def flow():
+        planner=await plugin.on_planner(session_id="chat-1",messages=[])
+        replyer=await plugin.on_replyer(session_id="chat-1",messages=[])
+        return planner,replyer
+    for result in asyncio.run(flow()):
+        context=str(result["modified_kwargs"])
+        assert "整理读书笔记" in context
+        assert "家里" in context
+        assert all(term not in context for term in ("精力","饥饿","睡眠阶段","休息期间未回应","梦境余韵"))
 
 
 def _host_function(path,name,namespace):

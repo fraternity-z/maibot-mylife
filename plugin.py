@@ -25,9 +25,7 @@ from .core.environment import EnvironmentService
 from .core.llm_service import LLMService
 from .core.storage import LifeStore,RECORD_RETENTION_DAYS
 from .information.information_service import InformationService
-from .life.bedtime import BEDTIME_LOOP_SECONDS,BedtimeManager
 from .life.continuity import ContinuityService
-from .life.life_state import LifeStateEngine
 from .life.memory_service import MemoryService
 from .life.proactive import ProactiveEngine
 from .life.rest_gate import RestGate
@@ -46,19 +44,8 @@ PRIVATE_COMMAND_ACCESS_DENIED="该指令仅对已配置并启用的私聊用户�
 # 主人被 admin_user_ids 配为他人时也会被这些命令拒绝；统一提示如何补充管理员。
 ADMIN_IDS_HINT="（如需其他管理员，请在 admin_user_ids 中加入其 QQ）"
 
-_SLEEP_PHASE_ZH={"awake":"清醒","woken":"被叫醒","falling_asleep":"入睡中",
-                 "light_sleep":"浅睡","deep_sleep":"深睡"}
 _SCHEDULE_KIND_ZH={"meal":"用餐","work":"工作","study":"学习","travel":"出行",
                    "leisure":"闲暇","sleep":"睡眠","nap":"午休","rest":"休息"}
-
-def _mood_label(value:float)->str:
-    """心情效价值翻译为中文档位，避免用户面对 -1~+1 的裸浮点。"""
-    if value<=-0.5:return "低落"
-    if value<=-0.15:return "有些闷"
-    if value<0.25:return "平静"
-    if value<0.6:return "不错"
-    return "很好"
-
 
 def _relative_age(created_at:float,now:float)->str:
     """把时间戳翻译成中文相对时长，供 WebUI 展示"多久之前"；非法时间戳显式降级。"""
@@ -160,9 +147,6 @@ def _node_view(node:dict[str,Any])->dict[str,Any]:
             "start":start,"end":end,"window":f"{start}-{end}"}
 
 
-# 睡眠相位集合：处于这些相位时才算"在休息"，休息类型才有意义。
-_SLEEPING_PHASES={"falling_asleep","light_sleep","deep_sleep","woken"}
-
 # WebUI 全文视图的分隔线：主人后台全量展示，多条全文拼接成一个大文本时分段用。
 _FULL_TEXT_SEP="\n\n────────────────────\n\n"
 
@@ -202,7 +186,6 @@ def _creation_result_text(result:dict[str,Any])->str:
         return f"已创作并归档《{title}》（{privacy}）"
     if status in {"disabled","plaintext_not_acknowledged"}:return "书柜创作未启用或未确认明文存储。"
     if status in {"daily_limit","daily_limit_zero"}:return "今日创作额度已用完。"
-    if status=="low_energy":return "精力不足，先不创作。"
     if status=="schedule_busy":return "当前时段不适合创作。"
     if status=="no_inspiration":return "暂时没有想写的灵感。"
     if status=="failed":return f"创作失败：{str(result.get('error') or '未知原因')}"
@@ -212,8 +195,8 @@ def _creation_result_text(result:dict[str,Any])->str:
 class _PayloadCache:
     """慢变背景块的会话级 TTL 缓存；同轮 planner/replyer 复用同一份快照（P4）。
 
-    只缓存分钟级变化的数据（memory/information/bookshelf/dream）；
-    state/weather/context/continuity/backlogs 保持每轮实时读取。
+    只缓存分钟级变化的数据（memory/information/bookshelf）；
+    state/weather/context/continuity 保持每轮实时读取。
     """
 
     def __init__(self, ttl_seconds: float) -> None:
@@ -255,10 +238,9 @@ class MaiLifePlugin(MaiBotPlugin):
         super().__init__()
         # 长生命周期服务在 on_load 按依赖顺序初始化，卸载前统一停止其后台任务。
         self._store:Optional[LifeStore]=None; self._env:Optional[EnvironmentService]=None
-        self._llm:Optional[LLMService]=None; self._state:Optional[LifeStateEngine]=None
+        self._llm:Optional[LLMService]=None
         self._schedule:Optional[ScheduleService]=None; self._rest:Optional[RestGate]=None
         self._proactive:Optional[ProactiveEngine]=None
-        self._bedtime:Optional[BedtimeManager]=None
         # bot 角色名：主程序 [bot] nickname，提示词用它而非硬编码；取不到时回落"麦麦"。
         self._bot_name="麦麦"
         # 慢变背景块缓存（P4）：TTL 由 context.background_cache_minutes 控制，0=禁用。
@@ -288,10 +270,9 @@ class MaiLifePlugin(MaiBotPlugin):
 
     @property
     def _ready(self)->bool:
-        return all((self._store,self._env,self._llm,self._state,self._schedule,self._rest,self._proactive,
+        return all((self._store,self._env,self._llm,self._schedule,self._rest,self._proactive,
                     self._continuity,self._memory,self._information,
-                    self._group_observer,self._relay,self._bookshelf,self._creation,self._admin,
-                    self._bedtime))
+                    self._group_observer,self._relay,self._bookshelf,self._creation,self._admin))
 
     def _now_ts(self)->float:
         return self._env.now().timestamp() if self._env else time.time()
@@ -349,9 +330,8 @@ class MaiLifePlugin(MaiBotPlugin):
         await self._store.initialize()
         self._llm=LLMService(self.ctx,self.config,self._store,now=self._env.now)
         await self._store.recover_creation_claims(self._env.now().timestamp())
-        self._state=LifeStateEngine(self._store,self.config,self._llm,self.ctx.logger,bot_name=self._bot_name)
         self._schedule=ScheduleService(self._store,self.config,self._llm,root,self.ctx.logger,bot_name=self._bot_name)
-        self._rest=RestGate(self._store,self.config,self._llm,self._state,self.ctx.logger,bot_name=self._bot_name)
+        self._rest=RestGate(self.config)
         self._proactive=ProactiveEngine(self.ctx,self._store,self.config,self._env,self.ctx.logger)
         self._continuity=ContinuityService(self._store,self.config,self._llm,self.ctx.logger)
         self._memory=MemoryService(self._store,self.config,self._llm,self.ctx.logger,bot_name=self._bot_name)
@@ -363,7 +343,6 @@ class MaiLifePlugin(MaiBotPlugin):
         self._creation=CreationService(self.ctx,self._store,self.config,self._llm,self.ctx.logger,bot_name=self._bot_name)
         self._admin=AdminService(self._store,self.config)
         self._command_replies=CommandReplyService(self.ctx,self.ctx.logger)
-        self._bedtime=BedtimeManager(self.ctx,self._store,self.config,self._env,self._state,self.ctx.logger)
         # 完成配置、会话和模型健康同步后，消息 Hook 才会通过 _ready 进入增强主链。
         await self._store.sync_users(self.config.users.profiles)
         await self._refresh_personality(); await self._resolve_all_streams(); await self._llm.refresh_health()
@@ -404,10 +383,9 @@ class MaiLifePlugin(MaiBotPlugin):
         # 热更新按 scope 分发到各服务：只有 self 会替换插件配置实例，此时才全量下发；
         # bot 只重载人格，model 只刷新模型健康，其他服务继续持有同一个已校验实例。
         if scope=="self":
-            for service in (self._llm,self._env,self._state,self._schedule,self._rest,self._proactive,
+            for service in (self._llm,self._env,self._schedule,self._rest,self._proactive,
                             self._continuity,self._memory,self._information,
-                            self._group_observer,self._relay,self._bookshelf,self._creation,self._admin,
-                            self._bedtime):
+                            self._group_observer,self._relay,self._bookshelf,self._creation,self._admin):
                 if service:service.update_config(self.config)
             if self._store:await self._store.sync_users(self.config.users.profiles)
             enabled_ids={str(profile.user_id) for profile in self.config.users.profiles if profile.enabled}
@@ -432,10 +410,9 @@ class MaiLifePlugin(MaiBotPlugin):
         task.add_done_callback(finished)
 
     def _start_tasks(self)->None:
-        """幂等启动六类后台循环，重复热更新不会创建重复调度器。"""
+        """幂等启动五类后台循环，重复热更新不会创建重复调度器。"""
         if self._tasks:return
         self._tasks=[asyncio.create_task(self._maintenance_loop(),name="mai-life-maintenance"),
-                     asyncio.create_task(self._bedtime_loop(),name="mai-life-bedtime"),
                      asyncio.create_task(self._proactive_loop(),name="mai-life-proactive"),
                      asyncio.create_task(self._daily_generation_loop(),name="mai-life-daily-generation"),
                      asyncio.create_task(self._information_loop(),name="mai-life-information"),
@@ -471,26 +448,16 @@ class MaiLifePlugin(MaiBotPlugin):
     async def _maintenance_loop(self)->None:
         while True:
             try:
-                await asyncio.sleep(max(60,self.config.state.tick_interval_minutes*60)); await self._maintenance_tick()
+                await asyncio.sleep(60); await self._maintenance_tick()
             except asyncio.CancelledError:raise
             except Exception as exc:self.ctx.logger.error(f"[MaiLife] 状态维护异常: {exc}")
-
-    async def _bedtime_loop(self)->None:
-        while True:
-            try:
-                # defer 必须新鲜：10 分钟维护 tick 会在静默刚达标时误拦仍在进行的对话。
-                await asyncio.sleep(BEDTIME_LOOP_SECONDS)
-                if self._env:await self._env.refresh_time()
-                if self._bedtime and self._env:await self._bedtime.tick(self._env.now())
-            except asyncio.CancelledError:raise
-            except Exception as exc:self.ctx.logger.error(f"[MaiLife] 睡前流程异常: {exc}")
 
     async def _proactive_loop(self)->None:
         while True:
             try:
                 await asyncio.sleep(max(60,self.config.proactive.patrol_interval_minutes*60)); await self._resolve_all_streams()
                 if self._proactive and self._store and self._env:
-                    now=self._env.now(); await self._proactive.patrol(now,await self._store.get_state())
+                    await self._proactive.patrol(self._env.now())
             except asyncio.CancelledError:raise
             except Exception as exc:self.ctx.logger.error(f"[MaiLife] 主动巡检异常: {exc}")
 
@@ -518,32 +485,29 @@ class MaiLifePlugin(MaiBotPlugin):
                 await asyncio.sleep(max(60,interval))
                 if not self.config.creation.enabled:continue
                 assert self._creation and self._env and self._store and self._schedule
-                now=self._env.now(); state=await self._store.get_state(); schedule=await self._schedule.context(now)
-                await self._creation.tick(now,self._personality,state,schedule)
+                now=self._env.now(); schedule=await self._schedule.context(now)
+                await self._creation.tick(now,self._personality,schedule)
             except asyncio.CancelledError:raise
             except Exception as exc:self.ctx.logger.error(f"[MaiLife] 书柜创作巡检异常: {exc}")
 
     async def _maintenance_tick(self,force_weather:bool=False,*,allow_weather_network:bool=True)->None:
-        """串行维护天气、日程细化、离线状态、记忆、关系结算和运行记录清理。"""
+        """串行维护天气、日程场景、日常活动、记忆、关系结算和运行记录清理。"""
         if not self._ready:return
         async with self._maintenance_lock:
-            assert self._env and self._schedule and self._store and self._state and self._memory
+            assert self._env and self._schedule and self._store and self._memory
             await self._env.refresh_time()
             now=self._env.now(); weather=await self._env.refresh_weather(force=force_weather,allow_network=allow_weather_network)
             memory_context=await self._memory.schedule_context(now)
             nodes=await self._schedule.ensure_day(now,self._personality,self._env.weather_text(weather),memory_context=memory_context,
                                                   environment=self._env.snapshot(now))
-            context=await self._schedule.context(now); state=await self._store.get_state()
-            await self._schedule.expand_due(now,nodes,state,self._env.weather_text(weather)); context=await self._schedule.context(now)
-            last_updated=float(state.get("last_updated_at") or now.timestamp())
-            simulation_start=datetime.fromtimestamp(max(last_updated,(now-timedelta(hours=72)).timestamp()),tz=now.tzinfo)
-            # 睡前流程先于相位推进：静默刚达标时先更新 defer/回睡，advance 才不会按旧值提前睡过去。
-            if self._bedtime:await self._bedtime.tick(now)
-            # 离线推进按日程边界切片，睡眠、进餐和场景增量才能按真实顺序应用。
-            timeline=await self._schedule.state_timeline(simulation_start,now)
-            await self._state.advance_timeline(now,timeline,context.get("current"),context.get("scene"))
-            # 逐小时状态快照：INSERT OR IGNORE 保证每小时只落一条，供长期动力学统计。
-            await self._store.save_state_snapshot(now.timestamp(),await self._store.get_state())
+            await self._schedule.expand_due(now,nodes,self._env.weather_text(weather))
+            context=await self._schedule.context(now)
+            current=context.get("current") or {}; scene=context.get("scene") or {}
+            await self._store.save_state({
+                "current_activity":str(scene.get("scene") or current.get("summary") or "自由活动"),
+                "current_location":str(current.get("location") or "家里"),
+                "last_updated_at":now.timestamp(),
+            })
             await self._memory.ensure_daily(now)
             await self._settle_relationships(now)
             await self._store.cleanup_runtime_records(
@@ -579,12 +543,6 @@ class MaiLifePlugin(MaiBotPlugin):
             await self._store.update_relationships(current.isoformat(),start.timestamp(),end.timestamp(),end.timestamp())
             current+=timedelta(days=1)
 
-    async def _record_mood_event(self,kind:str)->None:
-        """心情事件统一入口：按环境时区记日，统计失败不影响发送主链。"""
-        if not self._store or not self._env:return
-        try:await self._store.record_mood_event(kind,self._env.now())
-        except Exception as exc:self._get_logger().debug(f"[MaiLife] 心情事件记录失败 kind={kind}: {exc}")
-
     async def _refresh_personality(self)->None:
         try:self._personality=str(await self.ctx.config.get("personality.personality","") or "")
         except Exception as exc:self.ctx.logger.warning(f"[MaiLife] 读取人格失败: {exc}")
@@ -595,7 +553,7 @@ class MaiLifePlugin(MaiBotPlugin):
 
     def _apply_bot_name(self)->None:
         """把角色名分发给所有会写提示词的服务，避免各处硬编码旧名。"""
-        for target in (self._state,self._schedule,self._rest,self._memory,
+        for target in (self._schedule,self._memory,
                        self._information,self._relay,self._creation):
             setter=getattr(target,"set_bot_name",None)
             if setter:setter(self._bot_name)
@@ -736,8 +694,6 @@ class MaiLifePlugin(MaiBotPlugin):
                     str(value.get("turn_scope") or session_id),
                     str(value.get("turn_anchor") or value.get("anchor") or ""),
                 )
-                wake_id=str(value.get("wake_message_id") or "")
-                if wake_id:await self._store.clear_wake_candidate(session_id,wake_id)
             task_id=str(value.get("task_id") or "")
             if task_id:await self._active_tasks.release_reply(session_id,task_id,str(value.get("anchor") or ""))
 
@@ -803,12 +759,12 @@ class MaiLifePlugin(MaiBotPlugin):
         if message.get("is_notify"):
             uid,session,mid,private=message_identity(message)
             if private:
-                allowed,_reason=await self._rest.decide(uid,"",self._env.now(),None,allow_wake=False)
+                allowed,_reason=await self._rest.decide("",self._env.now())
                 enabled=True
             else:
                 gid,_gname=group_identity(message)
                 if session:self._group_sessions.add(session)
-                allowed,_reason=self._rest.decide_group("",self._env.now(),gid)
+                allowed,_reason=self._rest.decide_group("",self._env.now())
                 enabled=self.config.group.gate_enabled
             if not allowed:return {"action":"abort"}
             return self._probability_pass(kwargs,message,enabled)
@@ -857,10 +813,10 @@ class MaiLifePlugin(MaiBotPlugin):
         group_id,group_name=group_identity(merged)
         if group_id:
             await self._store.upsert_group_directory(group_id,group_name,session,self._env.now().timestamp())
-        # 每条消息只掷一次概率，不再读取日程、关键词或睡前协商状态。
+        # 每条消息只掷一次概率。
         if self._rest:
             group_allowed,group_reason=self._rest.decide_group(
-                direct_text(merged),self._env.now(),group_id)
+                direct_text(merged),self._env.now())
             if not group_allowed:
                 self.ctx.logger.debug(f"[MaiLife] 群聊未触发 group={group_id or session} reason={group_reason}")
                 return {"action":"abort"}
@@ -887,9 +843,7 @@ class MaiLifePlugin(MaiBotPlugin):
         if not uid or is_command(message):return {"action":"continue"}
         user=await self._store.get_user(uid)
         text=direct_text(message); media=media_types(message); now=self._env.now()
-        allowed,reason=await self._rest.decide(
-            uid,text,now,None,session_id=session,message_id=mid,media=media,
-            allow_wake=bool(user and user.get("enabled")))
+        allowed,reason=await self._rest.decide(text,now)
         if not allowed:
             self.ctx.logger.debug(f"[MaiLife] 私聊未触发 user={uid} reason={reason}")
             return {"action":"abort"}
@@ -946,8 +900,8 @@ class MaiLifePlugin(MaiBotPlugin):
         self._payload_cache.put(key,now_ts,value)
         return value
 
-    async def _prompt_payload(self,session_id:str,consume_backlog:bool=False)->dict[str,Any]|None:
-        """只为已配置私聊组装背景，并按调用阶段选择读取或消费休息积压。"""
+    async def _prompt_payload(self,session_id:str)->dict[str,Any]|None:
+        """只为已配置私聊组装日常生活背景。"""
         if self._stopping or self._reloading or not self.config.plugin.enabled or not self._ready:return None
         assert self._store and self._env and self._schedule and self._memory and self._information and self._bookshelf
         user=await self._user_by_session(session_id)
@@ -959,26 +913,19 @@ class MaiLifePlugin(MaiBotPlugin):
         # 连续话题有时效：超过 14 天未互动的话题视为已结束，不作为“未完话题”注入。
         if continuity and now.timestamp()-float(continuity.get("updated_at") or 0)>14*86400:
             continuity=dict(continuity); continuity["unresolved_topics"]=[]
-        backlogs=await (self._store.consume_rest_backlogs(user["user_id"]) if consume_backlog else self._store.peek_rest_backlogs(user["user_id"]))
-        # 睡前氛围只对私聊注入：夜窗前的回复会被提醒收尾道晚安（不透露提示存在）。
-        bedtime=""
-        if not self._is_group_session(session_id) and self._bedtime and self._bedtime.approaching(now):
-            bedtime="approaching"
         return {"state":await self._store.get_state(),"weather":await self._store.get_weather() or {"description":"天气未知"},
-                "context":await self._schedule.context(now),"user":user,"backlogs":backlogs,
+                "context":await self._schedule.context(now),"user":user,
                 "environment":self._env.snapshot(now,platform=str(runtime.get("platform") or "qq"),adapter=str(runtime.get("adapter") or "unknown"),
                                                  chat_type="private",media=runtime.get("media") or ["text"]),
                 "continuity":continuity,"intent":str(runtime.get("intent") or ""),
                 # P4 慢变块缓存：loader 签名不同（context_for_user 带 now、information.context 带 now、
-                # bookshelf/latest_dream 无参），键必须区分参数集，否则跨参数会误命中缓存。
+                # bookshelf 带 user），键必须区分参数集，否则跨参数会误命中缓存。
                 "memory":await self._cached_block("memory",user["user_id"],now,
                                                   self._memory.context_for_user,user,now),
                 "information":await self._cached_block("information",user["user_id"],now,
                                                        self._information.context,now),
                 "bookshelf":await self._cached_block("bookshelf",user["user_id"],now,
-                                                     self._bookshelf.context_for_user,user),
-                "dream":await self._cached_block("dream","",now,self._store.latest_dream),
-                "bedtime":bedtime}
+                                                     self._bookshelf.context_for_user,user)}
 
     @staticmethod
     def _planner_payload(kwargs:dict[str,Any])->Any:
@@ -1045,10 +992,10 @@ class MaiLifePlugin(MaiBotPlugin):
         if self.config.context.enabled and not group_passive:
             payload=await self._prompt_payload(session)
             if payload:
-                suffix=self._prompts.planner(payload["state"],payload["weather"],payload["context"],payload["user"],payload["dream"],
-                                             payload["backlogs"],payload["environment"],payload["continuity"],payload["intent"],
+                suffix=self._prompts.planner(payload["state"],payload["weather"],payload["context"],payload["user"],
+                                             payload["environment"],payload["continuity"],payload["intent"],
                                              int(self.config.context.prompt_max_chars),memory=payload["memory"],information=payload["information"],
-                                             bookshelf=payload["bookshelf"],bot_name=self._bot_name,bedtime=payload["bedtime"])
+                                             bookshelf=payload["bookshelf"],bot_name=self._bot_name)
         if active:
             # reply 的 msg_id 必须引用会话最近一条真实用户消息：proactive:xxx 任务编号宿主 reply 工具
             # 查不到（find_source_message_by_id 不认），报错还会被 to_display_message_id 哈希成乱码。
@@ -1059,7 +1006,7 @@ class MaiLifePlugin(MaiBotPlugin):
         suffix=self._clock_prompt()+suffix
         enabled=self.config.group.gate_enabled if self._is_group_session(session) else True
         if not active and enabled:
-            suffix+="\n【回复选择】本轮已通过回复策略：私聊工作时间内必回，群聊只抽取一次概率。请正常回应最新消息，不再根据关键词、睡眠状态或回复意愿重复决定是否开口。\n"
+            suffix+="\n【回复选择】本轮已通过回复策略：私聊工作时间内必回，群聊只抽取一次概率。请正常回应最新消息。\n"
         if not suffix:return {"action":"continue"}
         return self._inject_planner_context(kwargs,suffix)
 
@@ -1082,12 +1029,12 @@ class MaiLifePlugin(MaiBotPlugin):
         group_turn=self._group_turn_for(session,anchor) if self.config.group.turn_enabled else {}
         active=None if group_turn else await self._active_tasks.current(session,self._now_ts())
         if self.config.context.enabled and not group_turn:
-            payload=await self._prompt_payload(session,consume_backlog=True)
+            payload=await self._prompt_payload(session)
             if payload:
-                suffix=self._prompts.replyer(payload["state"],payload["weather"],payload["context"],payload["user"],payload["backlogs"],
+                suffix=self._prompts.replyer(payload["state"],payload["weather"],payload["context"],payload["user"],
                                              payload["environment"],payload["continuity"],payload["intent"],
                                              min(2400,int(self.config.context.prompt_max_chars)),memory=payload["memory"],information=payload["information"],
-                                             bookshelf=payload["bookshelf"],bot_name=self._bot_name,bedtime=payload["bedtime"],
+                                             bookshelf=payload["bookshelf"],bot_name=self._bot_name,
                                              detail=str(self.config.context.replyer_detail))
         if active and active.kind=="relay" and self._relay and self.config.group.relay_enabled:
             suffix+=await self._relay.prompt_context(session,active.task_id)
@@ -1216,11 +1163,10 @@ class MaiLifePlugin(MaiBotPlugin):
         expiry=max(20,int(self.config.context.turn_expire_seconds))
         self._reply_confirmations={key:value for key,value in self._reply_confirmations.items()
                                    if now-float(value.get("created_at") or 0)<expiry}
-        # 确认记录只描述待提交事实，醒来和主动额度都要等 after_send 的 sent=True。
+        # 确认记录只描述待提交事实，主动额度要等 after_send 的 sent=True。
         self._reply_confirmations[(session,anchor)]={
             "anchor":anchor,"turn_anchor":turn_anchor,"turn_scope":turn_scope,
             "task_id":task_id if active else "","created_at":now,
-            "wake_message_id":str(runtime.get("message_id") or "") if user and not active else "",
             "proactive_event_id":str(proactive.get("id") or "") if proactive_pending else "",
             "proactive_opportunity_id":str(proactive.get("opportunity_id") or "") if proactive_pending else "",
         }
@@ -1320,7 +1266,7 @@ class MaiLifePlugin(MaiBotPlugin):
 
     @HookHandler("send_service.after_send",mode=HookMode.OBSERVE)
     async def on_send_after(self,**kwargs:Any)->None:
-        """以平台实际发送结果提交或释放醒来、轮次锁、主动额度和转述候选。"""
+        """以平台实际发送结果提交或释放轮次锁、主动额度和转述候选。"""
         message=kwargs.get("message") if isinstance(kwargs.get("message"),dict) else {}
         sent=bool(kwargs.get("sent")); now_ts=self._now_ts()
         # 即使发送期间刚好热禁用了社交模块，也必须收口已经进入 sending 的候选。
@@ -1366,27 +1312,17 @@ class MaiLifePlugin(MaiBotPlugin):
                         self._get_logger().info(f"[MaiLife] 主动发送重复确认，此前已结算 session={session} event={settle_event or '-'}")
                     else:
                         self._get_logger().warning(f"[MaiLife] 主动发送结算未命中 session={session} event={settle_event or '-'} host_task={settle_host or '-'}")
-                await self._record_mood_event("proactive_reply")
         if not confirmation and not proactive_pending:
-            # 无锚点发送无法安全归因；不能因此误叫醒正在休息的麦麦。
-            if not tagged_task_id and anchor and sent and self._env and self._rest:
-                await self._rest.commit_for_send(session,self._env.now(),anchor)
-                await self._record_mood_event("passive_reply")
-            elif not tagged_task_id and anchor and not sent and self._store:
-                await self._store.clear_wake_candidate(session,anchor)
             return
         confirmation=confirmation or {"anchor":anchor,"turn_anchor":task_id,"task_id":task_id,
                                       "proactive_event_id":str(proactive["id"]),
                                       "proactive_opportunity_id":str(proactive.get("opportunity_id") or "")}
         anchor=str(confirmation.get("anchor") or "")
         turn_anchor=str(confirmation.get("turn_anchor") or anchor)
-        active_attribution=bool(tagged_task_id or confirmation.get("task_id") or proactive)
         # 发送失败必须释放所有预留，让后续轮次可重试，并归还尚未真正分享的生活契机。
         if not sent:
             if self._store:
                 await self._store.release_reply_turn(str(confirmation.get("turn_scope") or session),turn_anchor)
-            wake_id=str(confirmation.get("wake_message_id") or anchor)
-            if self._store and not active_attribution:await self._store.clear_wake_candidate(session,wake_id)
             active_task_id=str(confirmation.get("task_id") or tagged_task_id)
             if active_task_id:await self._active_tasks.release_reply(session,active_task_id,anchor)
             event_id=str(confirmation.get("proactive_event_id") or "")
@@ -1395,12 +1331,6 @@ class MaiLifePlugin(MaiBotPlugin):
                 opportunity_id=str(confirmation.get("proactive_opportunity_id") or "")
                 if opportunity_id:await self._store.release_opportunity(opportunity_id)
             return
-        # 普通被动回复成功才正式叫醒；主动/转述任务不会改变休息状态。
-        if self._env and self._rest and not active_attribution:
-            await self._rest.commit_for_send(
-                session,self._env.now(),str(confirmation.get("wake_message_id") or anchor),
-            )
-            await self._record_mood_event("passive_reply")
         # 主动发送结算已在上方统一处理（覆盖 confirmation 未命中、事件已过期等情况），此处不再重复。
 
     @Tool(
@@ -1598,7 +1528,7 @@ class MaiLifePlugin(MaiBotPlugin):
         if not self._creation or not self._env or not self._store or not self._schedule:
             return await self._send_command(kwargs,"创作服务尚未初始化。")
         now=self._env.now(); result=await self._creation.tick(
-            now,self._personality,await self._store.get_state(),await self._schedule.context(now),force=True,
+            now,self._personality,await self._schedule.context(now),force=True,
         )
         return await self._send_command(kwargs,_creation_result_text(result))
 
@@ -1656,17 +1586,14 @@ class MaiLifePlugin(MaiBotPlugin):
             return await self._send_command(kwargs,"只有私聊管理员可以查看回复策略诊断。"+ADMIN_IDS_HINT)
         if not self._ready:return await self._send_command(kwargs,"服务尚未初始化。")
         assert self._env and self._schedule and self._store
-        now=self._env.now(); context=await self._schedule.context(now); runtime=await self._store.get_sleep_runtime()
-        kind=str((context.get('current') or {}).get('kind') or "无"); phase=str(runtime.get('phase') or "未知")
-        grace=runtime.get('awake_grace_until')
+        now=self._env.now(); context=await self._schedule.context(now)
+        kind=str((context.get('current') or {}).get('kind') or "无")
         private=self.config.rest_gate; group=self.config.group
         text=(f"当前时间：{now.isoformat(timespec='seconds')}（{self.config.environment.timezone}）\n"
               f"计时来源：{self._env.clock.source}\n"
               f"私聊：工作时间内必回 / 时段限制{_switch(private.enabled)} / {private.work_start}-{private.work_end}\n"
               f"群聊：{_switch(group.gate_enabled)} / {group.reply_probability:.0%} / {group.work_start}-{group.work_end}\n"
-              f"日程类型：{_SCHEDULE_KIND_ZH.get(kind,kind)}\n"
-              f"睡眠阶段：{_SLEEP_PHASE_ZH.get(phase,phase)}\n醒来缓冲至："
-              f"{datetime.fromtimestamp(float(grace),tz=now.tzinfo).strftime('%H:%M') if grace else '无'}")
+              f"日程类型：{_SCHEDULE_KIND_ZH.get(kind,kind)}")
         return await self._send_command(kwargs,text)
 
     async def _status_report(self)->str:
@@ -1685,16 +1612,12 @@ class MaiLifePlugin(MaiBotPlugin):
         creation=await self._creation.status(self._env.now())
         segment=str((context.get("current") or {}).get("summary") or "无")
         activity=str(state.get("current_activity") or "自由活动")
-        mood=float(state.get("mood_valence",0))
         diary_text=f"最近一篇 {diaries[0]['day']}" if diaries else "暂无"
-        # 叙事类任务（梦境/日记/创作正文）不可用时明确告知“占位内容”，避免用户以为功能缺陷。
-        narrative_note=("；叙事任务无可用模型，梦境/日记/创作为占位内容"
+        # 叙事类任务不可用时明确告知“占位内容”，避免用户以为功能缺陷。
+        narrative_note=("；叙事任务无可用模型，日记/创作为占位内容"
                         if any(not self._llm.task_available(name)
-                               for name in ("dream","diary","creation_body")) else "")
-        return (f"麦日常 v{PLUGIN_VERSION}\n精力：{float(state.get('energy',0)):.0f}/100（0 耗尽、100 满电）  "
-                f"饥饿：{float(state.get('hunger',0)):.0f}/100（0 刚吃饱、100 非常饿）\n"
-                f"心情：{mood:+.2f}（{_mood_label(mood)}）  "
-                f"睡眠：{_SLEEP_PHASE_ZH.get(str(state.get('sleep_phase') or ''),str(state.get('sleep_phase') or '未知'))}\n"
+                               for name in ("diary","creation_body")) else "")
+        return (f"麦日常 v{PLUGIN_VERSION}\n"
                 f"场景：{activity}\n"
                 + (f"日程：{segment}\n" if segment!=activity else "")
                 + f"天气：{self._env.weather_text(weather)}\n\n"
@@ -1708,12 +1631,6 @@ class MaiLifePlugin(MaiBotPlugin):
                 f"书柜创作：{'开启' if creation['enabled'] else '关闭'}，今日归档 {creation['archived_today']}，"
                 f"待处理灵感 {creation['pending_inspirations']}，明文确认 {'是' if creation['plaintext_acknowledged'] else '否'}\n"
                 f"模型健康：{self._llm.health_error or '正常'}\n后台任务：{len(self._tasks)}")
-
-    def _sleep_kind_zh(self,phase:str,segment:dict[str,Any],now:Any)->str:
-        """日程中的休息类型仅描述生活状态，不参与回复选择。"""
-        if phase not in _SLEEPING_PHASES:return "清醒"
-        kind=str(segment.get("kind") or "rest")
-        return _SCHEDULE_KIND_ZH.get(kind,kind)
 
     @API(name="get_life_state",description="获取麦麦全局生活状态",version="1",public=True)
     async def api_get_state(self,**kwargs:Any)->dict[str,Any]:return await self._store.get_state() if self._store else {}
@@ -1870,61 +1787,46 @@ class MaiLifePlugin(MaiBotPlugin):
         return {"success":True,"data":await self._admin.snapshot(scope,self._env.now(),limit)}
 
     # ===== WebUI 只读数据源（v1.14.12）=====
-    # 十二个私有 @API 供声明式 WebUI 页面消费：纯本地聚合（无 LLM/网络调用，远低于 10 秒超时）、
+    # 私有 @API 供声明式 WebUI 页面消费：纯本地聚合（无 LLM/网络调用，远低于 10 秒超时）、
     # 响应键与契约逐字一致、列表与文本全部限量（远低于 512KiB 上限）、任何异常都回 {"success":False,"error":...}。
     # 时间戳字段（*_at / *_until）一律给 epoch 秒，人读字段（*_age / window / countdown）一律给中文；
-    # WebUI 后台只有 MaiBot 主人可进，日记/梦境/关系/日期/Token 全部可以上网页，唯一例外是 Key 只出指纹。
+    # WebUI 后台只有 MaiBot 主人可进，日记/关系/日期/Token 全部可以上网页，唯一例外是 Key 只出指纹。
 
-    @API(name="webui_status_overview",description="WebUI 概览：生活状态、日程定位、休息闸门运行时与服务运行态",version="1",public=False)
+    @API(name="webui_status_overview",description="WebUI 概览：日常活动、日程定位与服务运行态",version="1",public=False)
     async def webui_status_overview(self,**kwargs:Any)->dict[str,Any]:
         try:
             if not self._ready:return {"success":False,"error":"not_ready"}
             assert self._store and self._env and self._schedule and self._llm and self._information and self._creation
             now=self._env.now(); now_ts=now.timestamp()
             state=await self._store.get_state(); weather=await self._store.get_weather() or {}
-            sleep=await self._store.get_sleep_runtime(); diaries=await self._store.list_diaries(1)
+            diaries=await self._store.list_diaries(1)
             observations=await self._store.recent_group_observations(now_ts,100)
             context=await self._schedule.context(now); snap=self._env.snapshot(now)
             current=context.get("current") or {}; nxt=context.get("next") or {}; scene=context.get("scene") or {}
             info=await self._information.status(now); creation=await self._creation.status(now)
-            mood=float(state.get("mood_valence") or 0); phase=str(state.get("sleep_phase") or "")
             # 后台联网失败不能完全静默：带出最近一次失败分类，便于区分"没新闻"与"搜索挂了"。
             last_failure=next((str(item.get("error_class") or "") for item in
                                await self._store.recent_search_history(now.timestamp(),20)
                                if item.get("success")==0 and str(item.get("error_class") or "")),"无")
-            # 叙事类任务（梦境/日记/创作正文）不可用时明确告知"占位内容"，避免用户以为功能缺陷。
-            narrative_note=("叙事任务无可用模型，梦境/日记/创作为占位内容"
+            # 叙事类任务不可用时明确告知"占位内容"，避免用户以为功能缺陷。
+            narrative_note=("叙事任务无可用模型，日记/创作为占位内容"
                             if any(not self._llm.task_available(name)
-                                   for name in ("dream","diary","creation_body")) else "")
+                                   for name in ("diary","creation_body")) else "")
             profiles=self.config.users.profiles
             return {
                 "generated_at":now.isoformat(timespec="seconds"),"bot_name":self._bot_name,"version":PLUGIN_VERSION,
-                "state":{"energy":round(float(state.get("energy") or 0),1),
-                         "hunger":round(float(state.get("hunger") or 0),1),
-                         "mood_valence":round(mood,1),
-                         "mood_arousal":round(float(state.get("mood_arousal") or 0),1),
-                         "mood_label":_mood_label(mood),
-                         "sleep_phase_zh":_SLEEP_PHASE_ZH.get(phase,phase or "未知"),
-                         "current_activity":str(state.get("current_activity") or ""),
+                "state":{"current_activity":str(state.get("current_activity") or ""),
                          "current_location":str(state.get("current_location") or ""),
-                         "health_note":str(state.get("health_note") or "")},
+                         "last_updated_at":float(state.get("last_updated_at") or 0)},
                 "schedule":{"current":_node_view(current),
                             "next":{"kind_zh":_SCHEDULE_KIND_ZH.get(str(nxt.get("kind") or ""),str(nxt.get("kind") or "") or "未知"),
                                     "summary":str(nxt.get("summary") or ""),
                                     "start":hhmm(int(nxt.get("start_minute") or 0))} if nxt else {"kind_zh":"","summary":"","start":""},
                             "next_summary":str(nxt.get("summary") or ""),
-                            "scene":{"scene":str(scene.get("scene") or ""),
-                                     "applied":bool(scene.get("applied"))} if scene else {"scene":"","applied":False}},
+                            "scene":{"scene":str(scene.get("scene") or "")}},
                 "weather":EnvironmentService.weather_text(weather),
                 "day_type":str(snap.get("day_type") or ""),
                 "upcoming_festival":str(snap.get("upcoming_festival") or ""),
-                "sleep":{"phase_zh":_SLEEP_PHASE_ZH.get(str(sleep.get("phase") or ""),str(sleep.get("phase") or "") or "未知"),
-                         "kind_zh":self._sleep_kind_zh(str(sleep.get("phase") or ""),current,now),
-                         "grace_until":_hhmm_text(sleep.get("awake_grace_until"),now),
-                         "woken_count":int(sleep.get("woken_count") or 0),
-                         "last_event":str(sleep.get("last_event") or ""),
-                         "defer_until":_hhmm_text(sleep.get("sleep_defer_until"),now),
-                         "started_at":_hhmm_text(sleep.get("started_at"),now)},
                 "services":{"llm_health":self._llm.health_error or "正常",
                             "available_tasks":"、".join(sorted(self._llm.available_tasks)) or "无",
                             "background_tasks":len(self._tasks),
@@ -1941,34 +1843,6 @@ class MaiLifePlugin(MaiBotPlugin):
                             "archived_today":int(creation.get("archived_today") or 0),
                             "pending_inspirations":int(creation.get("pending_inspirations") or 0)},
             }
-        except Exception as exc:
-            return {"success":False,"error":f"{type(exc).__name__}: {exc}"[:200]}
-
-    @API(name="webui_status_history",description="WebUI 曲线：最近 72 小时逐小时生活状态轨迹",version="1",public=False)
-    async def webui_status_history(self,**kwargs:Any)->dict[str,Any]:
-        try:
-            if not (self._store and self._env):return {"success":False,"error":"not_ready"}
-            assert self._store and self._env
-            now=self._env.now()
-            rows=await self._store.recent_state_snapshots(now.timestamp(),hours=72)
-            # 渲染器是类别轴（等宽分格，与时间值无关）：快照间隔 1 小时和 9 小时会一样宽，
-            # 时间轴就是假的。按 2 小时网格重采样（网格点取该时刻最近一次快照，状态在两次
-            # 快照间视为持稳），x 轴才既均匀又代表真实时间。
-            points=[]
-            if rows:
-                step=2*3600; index=0; cursor=float(rows[0].get("ts") or 0); end=now.timestamp()
-                while cursor<=end+1:
-                    while index+1<len(rows) and float(rows[index+1].get("ts") or 0)<=cursor:
-                        index+=1
-                    row=rows[index]
-                    points.append({"ts":cursor,"time":_hhmm_text(cursor,now) or "—",
-                                   "energy":round(float(row.get("energy") or 0),1),
-                                   "hunger":round(float(row.get("hunger") or 0),1),
-                                   "mood_valence":round(float(row.get("mood_valence") or 0),1),
-                                   "mood_arousal":round(float(row.get("mood_arousal") or 0),1),
-                                   "sleep_phase":str(row.get("sleep_phase") or "")})
-                    cursor+=step
-            return {"points":points}
         except Exception as exc:
             return {"success":False,"error":f"{type(exc).__name__}: {exc}"[:200]}
 
@@ -2082,15 +1956,13 @@ class MaiLifePlugin(MaiBotPlugin):
                             "summary":str(nxt.get("summary") or ""),
                             "start":hhmm(int(nxt.get("start_minute") or 0))}
                            if (nxt:=context.get("next") or {}) else {"kind_zh":"","summary":"","start":""},
-                    "scene":{"scene":str(scene.get("scene") or ""),
-                             "applied":bool(scene.get("applied"))} if scene else {"scene":"","applied":False},
+                    "scene":{"scene":str(scene.get("scene") or "")},
                     "nodes":[{"start":hhmm(int(node.get("start_minute") or 0)),
                               "end":hhmm(int(node.get("end_minute") or 0)),
                               "kind_zh":_SCHEDULE_KIND_ZH.get(str(node.get("kind") or ""),str(node.get("kind") or "") or "未知"),
                               "summary":str(node.get("summary") or ""),
                               "location":str(node.get("location") or ""),
                               "scene":str((scenes.get(str(node.get("id") or "")) or {}).get("scene") or ""),
-                              "energy_load":round(float(node.get("energy_load") or 0),1),
                               "shareability":round(float(node.get("shareability") or 0),2)}
                              for node in nodes],
                     "tomorrow":{"day":tomorrow,
@@ -2137,45 +2009,29 @@ class MaiLifePlugin(MaiBotPlugin):
         except Exception as exc:
             return {"success":False,"error":f"{type(exc).__name__}: {exc}"[:200]}
 
-    @API(name="webui_memories",description="WebUI 生活记忆：近期日记列表、最新日记正文摘录与近期梦境碎片",version="1",public=False)
+    @API(name="webui_memories",description="WebUI 生活记忆：近期日记列表与日记正文",version="1",public=False)
     async def webui_memories(self,**kwargs:Any)->dict[str,Any]:
         try:
             if not (self._store and self._env):return {"success":False,"error":"not_ready"}
             assert self._store and self._env
-            now=self._env.now(); now_ts=now.timestamp()
+            now=self._env.now()
             # 主人后台全量展示：日记 20 篇且每篇带正文全文，另拼 diaries_full_text 供全文 tab 整段阅读。
             diaries=await self._store.list_diaries(limit=20)
             runtime=await self._store.memory_runtime()
-            latest_dream=await self._store.latest_dream()
-            dreams=await self._store.dreams_between(now_ts-30*86400,now_ts)
             diary_views=[{"day":str(item.get("day") or ""),"title":str(item.get("title") or "")[:160],
-                          "mood_summary":str(item.get("mood_summary") or ""),
                           "content":str(item.get("content") or "")} for item in diaries]
             diaries_full_text=_FULL_TEXT_SEP.join(
-                f"【{item['day']}】{item['title']}\n心情：{item['mood_summary'] or '—'}\n\n"
+                f"【{item['day']}】{item['title']}\n\n"
                 f"{item['content'] or '（无正文）'}"
                 for item in diary_views) or "（暂无日记）"
             return {"generated_at":now.isoformat(timespec="seconds"),
                     "last_diary_day":str(runtime.get("last_diary_day") or (diaries[0]["day"] if diaries else "")),
-                    "diary_count":len(diaries),"dream_count":len(dreams),
+                    "diary_count":len(diaries),
                     "latest_diary":{"day":str(diaries[0].get("day") or ""),
                                     "title":str(diaries[0].get("title") or "")[:160],
-                                    "content":str(diaries[0].get("content") or ""),
-                                    "mood_summary":str(diaries[0].get("mood_summary") or "")} if diaries else {"day":"","title":"","content":"","mood_summary":""},
+                                    "content":str(diaries[0].get("content") or "")} if diaries else {"day":"","title":"","content":""},
                     "diaries":diary_views,
-                    "diaries_full_text":diaries_full_text,
-                    "latest_dream":{"created_at":float(latest_dream.get("created_at") or 0),
-                                    "content":str(latest_dream.get("content") or ""),
-                                    "mood_delta":round(float(latest_dream.get("mood_delta") or 0),2),
-                                    "energy_delta":round(float(latest_dream.get("energy_delta") or 0),2),
-                                    "fragments":[str(item) for item in (latest_dream.get("fragments") or [])][:10]}
-                                   if latest_dream else {"created_at":0,"content":"","mood_delta":0,"energy_delta":0,"fragments":[]},
-                    # dreams_between 按 created_at 升序，取末尾 20 条即最近 20 条。
-                    "dreams":[{"created_at":float(item.get("created_at") or 0),
-                               "content":str(item.get("content") or ""),
-                               "mood_delta":round(float(item.get("mood_delta") or 0),2),
-                               "energy_delta":round(float(item.get("energy_delta") or 0),2)}
-                              for item in dreams[-20:]]}
+                    "diaries_full_text":diaries_full_text}
         except Exception as exc:
             return {"success":False,"error":f"{type(exc).__name__}: {exc}"[:200]}
 
@@ -2299,10 +2155,6 @@ class MaiLifePlugin(MaiBotPlugin):
                              "group_share_daily_max":int(cfg.group.group_share_daily_max),
                              "group_share_min_interval_minutes":int(cfg.group.group_share_min_interval_minutes)},
                     "memory":{"enabled":_switch(cfg.memory.enabled),
-                              "dream_fragments_enabled":_switch(cfg.memory.dream_fragments_enabled),
-                              "dream_fragment_count":int(cfg.memory.dream_fragment_count),
-                              "dream_probability":round(float(cfg.memory.dream_probability),2),
-                              "dream_weekly_max":int(cfg.memory.dream_weekly_max),
                               "diary_enabled":_switch(cfg.memory.diary_enabled),
                               "diary_hour":int(cfg.memory.diary_hour),
                               "diary_max_chars":int(cfg.memory.diary_max_chars),
@@ -2327,7 +2179,6 @@ class MaiLifePlugin(MaiBotPlugin):
                     "creation":{"enabled":_switch(cfg.creation.enabled),
                                 "plaintext_storage_acknowledged":_switch(cfg.creation.plaintext_storage_acknowledged),
                                 "daily_max":int(cfg.creation.daily_max),
-                                "minimum_energy":int(cfg.creation.minimum_energy),
                                 "public_works_enabled":_switch(cfg.creation.public_works_enabled),
                                 "inspiration_lookback_days":int(cfg.creation.inspiration_lookback_days),
                                 "external_reading_enabled":_switch(cfg.creation.external_reading_enabled),
@@ -2349,7 +2200,6 @@ class MaiLifePlugin(MaiBotPlugin):
                                  "recent_user_silence_minutes":int(cfg.proactive.recent_user_silence_minutes),
                                  "pending_expire_seconds":int(cfg.proactive.pending_expire_seconds),
                                  "max_retries_per_opportunity":int(cfg.proactive.max_retries_per_opportunity),
-                                 "minimum_energy":int(cfg.proactive.minimum_energy),
                                  "score_threshold":round(float(cfg.proactive.score_threshold),2)},
                     "usage":{"enabled":_switch(cfg.usage.enabled),"retention_days":int(cfg.usage.retention_days)}}
             # editable:各节可经 webui_config_save 回写的字段与类型（非标量与派生键天然缺席）。

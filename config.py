@@ -13,7 +13,7 @@ from maibot_sdk import Field, PluginConfigBase
 from pydantic import field_validator, model_validator
 
 PLUGIN_VERSION = "1.0.0"
-CONFIG_SCHEMA_VERSION = "1.14.0"
+CONFIG_SCHEMA_VERSION = "1.15.0"
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -107,17 +107,17 @@ class PluginSettings(PluginConfigBase):
     )
     enabled: bool = Field(
         default=True,
-        description="麦日常总开关。关闭后停止状态维护、日程生成和主动私聊。",
+        description="麦日常总开关。关闭后停止日程维护和主动私聊。",
         json_schema_extra=_ui(
-            "启用麦日常", "关闭后保留数据库，但停止所有后台模拟与主动行为。", 0,
-            label_en="Enable Mai MyLife", hint_en="Keep data but stop simulation and proactive behavior when disabled.",
+            "启用麦日常", "关闭后保留数据库，但停止后台生活记录与主动行为。", 0,
+            label_en="Enable Mai MyLife", hint_en="Keep data but stop life tracking and proactive behavior when disabled.",
         ),
     )
     admin_user_ids: list[str] = Field(
         default_factory=list,
         description="允许在私聊使用菜单、状态和管理诊断指令的 QQ 号列表。",
         json_schema_extra=_ui(
-            "管理员 QQ 列表", "管理员无需同时创建用户档案即可使用管理类指令；关系、撤回摘要和重要日期等个人功能仍需启用用户档案。留空时，第一个有效私聊用户自动成为管理员。", 1,
+            "管理员 QQ 列表", "管理员无需同时创建用户档案即可使用管理类指令；关系和重要日期等个人功能仍需启用用户档案。留空时，第一个有效私聊用户自动成为管理员。", 1,
             label_en="Administrator QQ IDs", hint_en="Administrators can use management commands without a user profile; relationship and personal-record commands still require an enabled profile. If empty, the first valid private user becomes administrator.",
             placeholder="123456789",
         ),
@@ -187,8 +187,8 @@ class UserProfile(PluginConfigBase):
         default=1, ge=0, le=20,
         description="该用户每天最多实际收到的主动消息次数（硬上限，不是目标次数）。",
         json_schema_extra=_ui(
-            "用户每日主动上限", "每日最多主动发送 N 次（硬上限，非目标次数）。实际次数常少于该值：受免打扰、冷却、精力、候选评分和 Planner 自主决策约束。0 表示禁止主动消息；主人通常填 2，朋友通常填 1。", 4,
-            label_en="Per-user Daily Proactive Limit", hint_en="Hard cap of proactive messages per day (not a target). Actual count is often lower due to quiet hours, cooldown, energy, scoring and Planner decisions. Zero disables proactive messages.",
+            "用户每日主动上限", "每日最多主动发送 N 次（硬上限，非目标次数）。实际次数常少于该值：受免打扰、冷却、候选评分和 Planner 自主决策约束。0 表示禁止主动消息；主人通常填 2，朋友通常填 1。", 4,
+            label_en="Per-user Daily Proactive Limit", hint_en="Hard cap of proactive messages per day (not a target). Actual count is often lower due to quiet hours, cooldown, scoring and Planner decisions. Zero disables proactive messages.",
         ),
     )
     initial_temperature: int = Field(
@@ -279,8 +279,8 @@ class UsersSettings(PluginConfigBase):
         default_factory=list,
         description="允许进入麦日常系统的私聊用户。",
         json_schema_extra=_ui(
-            "私聊用户列表", "麦日常状态全局共享，但每位用户的关系、额度和免打扰相互独立。", 0,
-            label_en="Private User Profiles", hint_en="Life state is global while relationship, quota and quiet hours are per user.",
+            "私聊用户列表", "麦麦的日程和生活记录全局共享，但每位用户的关系、额度和免打扰相互独立。", 0,
+            label_en="Private User Profiles", hint_en="Schedules and life records are global while relationship, quota and quiet hours are per user.",
         ),
     )
     @model_validator(mode="after")
@@ -343,9 +343,6 @@ class CreationSettings(PluginConfigBase):
     daily_max: int = Field(default=1, ge=0, le=5, description="每日最多归档作品数。",
         json_schema_extra=_ui("每日作品上限", "默认 1；失败运行不计入已归档作品。", 3,
                               label_en="Daily Work Limit", hint_en="Maximum archived works per day; failed runs do not count."))
-    minimum_energy: int = Field(default=35, ge=0, le=100, description="允许创作的最低精力。",
-        json_schema_extra=_ui("创作最低精力", "精力不足时优先休息，不启动创作模型链。", 4,
-                              label_en="Minimum Creation Energy", hint_en="Creation is skipped when Mai needs rest."))
     allowed_schedule_types: list[str] = Field(default_factory=lambda:["leisure","rest"], description="允许创作的日程类型。",
         json_schema_extra=_ui("允许创作的日程", "建议只保留 leisure 和 rest。", 5,
                               label_en="Allowed Schedule Types", hint_en="Usually leisure and rest only."))
@@ -355,14 +352,14 @@ class CreationSettings(PluginConfigBase):
         json_schema_extra=_ui("作品类型", "可选小说片段、诗、随笔、短剧、分镜、角色和世界观。", 6,
                               label_en="Work Types", hint_en="Allowed narrative and design formats."))
     public_works_enabled: bool = Field(default=True, description="允许无私密来源的作品公开给朋友。",
-        json_schema_extra=_ui("允许公开作品", "日记、梦境和私密阅读来源仍会强制保持 private。", 7,
-                              label_en="Allow Public Works", hint_en="Diary, dream and private-reading sources remain private."))
+        json_schema_extra=_ui("允许公开作品", "日记和私密阅读来源仍会强制保持 private。", 7,
+                              label_en="Allow Public Works", hint_en="Diary and private-reading sources remain private."))
     create_share_opportunity: bool = Field(default=True, description="归档后生成低频分享契机。",
         json_schema_extra=_ui("允许分享完成作品", "私人作品只会定向给主人，公开作品仍由 Planner 和主动额度终审。", 8,
                               label_en="Share Archived Works", hint_en="Private works target the owner; public works still require Planner review."))
     inspiration_lookback_days: int = Field(default=7, ge=1, le=90, description="灵感来源回看天数。",
-        json_schema_extra=_ui("灵感回看天数", "只读取麦麦自己的生活、梦境和日记摘要。", 9,
-                              label_en="Inspiration Lookback", hint_en="Reads Mai's own life, dreams and diary summaries only."))
+        json_schema_extra=_ui("灵感回看天数", "只读取麦麦自己的生活和日记摘要。", 9,
+                              label_en="Inspiration Lookback", hint_en="Reads Mai's own life and diary summaries only."))
     max_body_chars: int = Field(default=4000, ge=500, le=16000, description="作品正文最大字符数。",
         json_schema_extra=_ui("作品正文上限", "用于限制模型成本和 SQLite 文本体积。", 10,
                               label_en="Maximum Work Length", hint_en="Limits model cost and SQLite text size."))
@@ -441,63 +438,8 @@ class EnvironmentSettings(PluginConfigBase):
     )
 
 
-class StateSettings(PluginConfigBase):
-    """生活数值推进与身体周期配置。"""
-
-    __ui_label__: ClassVar[str] = "生活状态"
-    __ui_order__: ClassVar[int] = 4
-    __ui_i18n__: ClassVar[dict[str, dict[str, str]]] = {
-        "en_US": {"title": "Life State", "description": "Deterministic energy, hunger, health and body-cycle simulation."}
-    }
-
-    awake_grace_minutes: int = Field(default=30, ge=0, le=240, description="睡眠中回复后保持清醒的分钟数，仅影响生活模拟。",
-        json_schema_extra=_ui("醒来缓冲（分钟）", "仅控制生活状态；不改变回复概率或工作时段。", 5,
-                              label_en="Awake Grace Period", hint_en="Life simulation only; does not change reply probability or working hours."))
-
-    tick_interval_minutes: int = Field(
-        default=10, ge=1, le=60,
-        description="生活状态推进间隔。",
-        json_schema_extra=_ui(
-            "状态推进间隔（分钟）", "越短状态更新越及时，但数据库写入更频繁。建议保持 10 分钟。", 0,
-            label_en="State Tick Interval (min)", hint_en="Shorter intervals update faster but write to the database more often.",
-        ),
-    )
-    body_cycle_enabled: bool = Field(
-        default=False,
-        description="是否启用身体周期模拟。",
-        json_schema_extra=_ui(
-            "启用身体周期", "默认关闭。启用前请确认符合麦麦的人格和身体设定。", 1,
-            label_en="Enable Body Cycle", hint_en="Disabled by default. Enable only when it fits the character setting.",
-        ),
-    )
-    body_cycle_start_date: str = Field(
-        default="",
-        description="身体周期第 1 天对应的日期。",
-        json_schema_extra=_ui(
-            "周期起始日期", "格式 YYYY-MM-DD；仅在启用身体周期后使用。", 2,
-            label_en="Cycle Start Date", hint_en="Day one of the cycle in YYYY-MM-DD format.", placeholder="2026-07-01",
-        ),
-    )
-    body_cycle_length_days: int = Field(
-        default=28, ge=20, le=45,
-        description="完整身体周期长度。",
-        json_schema_extra=_ui(
-            "周期长度（天）", "允许范围 20～45 天，默认 28 天。", 3,
-            label_en="Cycle Length (days)", hint_en="Full cycle length, from 20 to 45 days.",
-        ),
-    )
-    body_cycle_period_days: int = Field(
-        default=5, ge=1, le=10,
-        description="周期中经期持续天数。",
-        json_schema_extra=_ui(
-            "经期持续天数", "允许范围 1～10 天，只用于轻度状态修正。", 4,
-            label_en="Period Duration (days)", hint_en="From 1 to 10 days; only used for mild state adjustments.",
-        ),
-    )
-
-
 class MemorySettings(PluginConfigBase):
-    """梦境、日记与重要日期。"""
+    """日记与重要日期。"""
 
     __ui_label__: ClassVar[str] = "生活记忆"
     __ui_order__: ClassVar[int] = 5
@@ -507,29 +449,9 @@ class MemorySettings(PluginConfigBase):
         json_schema_extra=_ui("启用生活记忆", "总开关；关闭后保留已有日记和日期数据。", 0,
                               label_en="Enable Life Memory", hint_en="Keep existing data while pausing memory settlement."),
     )
-    dream_fragments_enabled: bool = Field(
-        default=True, description="在有效夜间睡眠后保存梦境碎片。",
-        json_schema_extra=_ui("启用梦境碎片", "梦境摘要之外保存少量醒后片段，不强制在聊天中提起。", 1,
-                              label_en="Enable Dream Fragments", hint_en="Store a few wake-up fragments alongside the dream summary."),
-    )
-    dream_fragment_count: int = Field(
-        default=3, ge=1, le=5, description="每次梦境最多保存的碎片数。",
-        json_schema_extra=_ui("梦境碎片数量", "范围 1～5，默认 3。", 2,
-                              label_en="Dream Fragment Count", hint_en="Maximum fragments stored per dream."),
-    )
-    dream_probability: float = Field(
-        default=0.35, ge=0, le=1, description="合格夜晚醒来后实际生成梦境的概率。",
-        json_schema_extra=_ui("做梦概率", "每个合格夜晚醒来独立掷一次，0.35 表示约每周 2～3 次；0 永不做梦，1 每晚必做。午睡和短睡路径不掷。", 3,
-                              label_en="Dream Probability", hint_en="Rolled once per eligible night wake-up; 0 never dreams, 1 always does. Naps are not rolled."),
-    )
-    dream_weekly_max: int = Field(
-        default=0, ge=0, le=7, description="近 7 天已落库梦境数上限。",
-        json_schema_extra=_ui("每周梦境上限", "默认 0 不限制，只靠上方概率单旋钮；设为正数后，近 7 天梦境数达到上限的当晚直接跳过做梦，是对冲连彩的可选保险。", 4,
-                              label_en="Weekly Dream Limit", hint_en="Default 0 disables the cap. When set, nights already at the recent 7-day limit skip dreaming."),
-    )
     diary_enabled: bool = Field(
         default=True, description="每天生成前一天的抽象日记。",
-        json_schema_extra=_ui("启用抽象日记", "只使用生活节点、梦境和互动数量，不复制聊天原文。", 5,
+        json_schema_extra=_ui("启用抽象日记", "只使用生活节点和互动数量，不复制聊天原文。", 5,
                               label_en="Enable Abstract Diary", hint_en="Uses life events and interaction counts, never chat transcripts."),
     )
     diary_hour: int = Field(
@@ -771,9 +693,9 @@ class ContextSettings(PluginConfigBase):
     )
     background_cache_minutes: int = Field(
         default=5, ge=0, le=60,
-        description="慢变背景块（生活记忆/外界见闻/书柜/梦境）的会话级缓存分钟数；0 表示每轮实时读取。",
+        description="慢变背景块（生活记忆/外界见闻/书柜）的会话级缓存分钟数；0 表示每轮实时读取。",
         json_schema_extra=_ui(
-            "背景缓存（分钟）", "记忆/见闻/书柜/梦境按用户缓存指定分钟数，减少每轮重复读取与注入；0 关闭。",
+            "背景缓存（分钟）", "记忆/见闻/书柜按用户缓存指定分钟数，减少每轮重复读取与注入；0 关闭。",
             5, label_en="Background Cache (min)",
             hint_en="Cache slow-changing background blocks per user; 0 disables.",
         ),
@@ -806,34 +728,6 @@ class ContextSettings(PluginConfigBase):
     )
 
 
-class RecallSettings(PluginConfigBase):
-    """撤回增强已删除（v1.24.7）。保留空壳配置节以维持旧 config.toml 兼容。"""
-
-    __ui_label__: ClassVar[str] = "撤回增强（已移除）"
-    __ui_order__: ClassVar[int] = 99
-
-    enabled: bool = Field(
-        default=False, description="已废弃，撤回增强功能已在 v1.24.7 删除。",
-        json_schema_extra=_ui("撤回增强（已移除）", "该功能已删除，此配置节仅为兼容旧 config.toml 保留，可整段删去。",
-                              0, label_en="Recall (Removed)", hint_en="Feature removed in v1.24.7; this section only keeps old config.toml valid.",
-                              hidden=True, disabled=True))
-    cache_summary_enabled: bool = Field(
-        default=False, description="已废弃。",
-        json_schema_extra=_ui("撤回摘要缓存（已移除）", "该功能已删除。", 1,
-                              label_en="Summary Cache (Removed)", hint_en="Feature removed.",
-                              hidden=True, disabled=True))
-    summary_ttl_minutes: int = Field(
-        default=10, description="已废弃。",
-        json_schema_extra=_ui("摘要缓存时长（已移除）", "该功能已删除。", 2,
-                              label_en="Summary TTL (Removed)", hint_en="Feature removed.",
-                              hidden=True, disabled=True))
-    summary_max_chars: int = Field(
-        default=240, description="已废弃。",
-        json_schema_extra=_ui("摘要长度上限（已移除）", "该功能已删除。", 3,
-                              label_en="Summary Max Chars (Removed)", hint_en="Feature removed.",
-                              hidden=True, disabled=True))
-
-
 class ModelRoutingSettings(PluginConfigBase):
     """MaiBot 任务路由名，而不是 Provider API Key。"""
 
@@ -842,10 +736,9 @@ class ModelRoutingSettings(PluginConfigBase):
 
     fast_task: str = Field(default="utils", description="快速整理任务名。", json_schema_extra=_ui("快速任务", "默认 utils，用于连续话题等轻量任务。", 0, label_en="Fast Task", hint_en="MaiBot task name for lightweight analysis."))
     reasoning_task: str = Field(default="planner", description="推理任务名。", json_schema_extra=_ui("推理任务", "默认 planner，用于搜索规划、自我关联等复杂判断（日程与场景已改走快速任务）。", 1, label_en="Reasoning Task", hint_en="MaiBot task name for reasoning."))
-    creative_task: str = Field(default="replyer", description="创作任务名。", json_schema_extra=_ui("创作任务", "默认 replyer，用于梦境和叙事文本。", 2, label_en="Creative Task", hint_en="MaiBot task name for narrative generation."))
+    creative_task: str = Field(default="replyer", description="创作任务名。", json_schema_extra=_ui("创作任务", "默认 replyer，用于日记和叙事文本。", 2, label_en="Creative Task", hint_en="MaiBot task name for narrative generation."))
     schedule_task: str = Field(default="", description="日程任务覆盖。", json_schema_extra=_ui("日程任务覆盖", "留空继承快速任务；日程是结构化 JSON 任务，慢推理模型容易撞 30 秒超时。", 4, label_en="Schedule Override", hint_en="Leave empty to inherit fast task; slow reasoning models hit the 30s timeout."))
     continuity_task: str = Field(default="", description="连续话题任务覆盖。", json_schema_extra=_ui("话题整理任务覆盖", "留空继承快速任务。", 6, label_en="Continuity Override", hint_en="Leave empty to inherit fast task."))
-    dream_task: str = Field(default="", description="梦境任务覆盖。", json_schema_extra=_ui("梦境任务覆盖", "留空继承创作任务。", 7, label_en="Dream Override", hint_en="Leave empty to inherit creative task."))
     diary_task: str = Field(default="", description="日记任务覆盖。", json_schema_extra=_ui("日记任务覆盖", "留空继承创作任务。", 9, label_en="Diary Override", hint_en="Leave empty to inherit creative task."))
     date_analysis_task: str = Field(default="", description="日期分析任务覆盖。", json_schema_extra=_ui("日期分析任务覆盖", "留空继承快速任务。", 10, label_en="Date Analysis Override", hint_en="Leave empty to inherit fast task."))
     news_task: str = Field(default="", description="新闻整理任务覆盖。", json_schema_extra=_ui("新闻整理任务覆盖", "留空继承快速任务。", 11, label_en="News Digest Override", hint_en="Leave empty to inherit fast task."))
@@ -922,8 +815,8 @@ class ProactiveSettings(PluginConfigBase):
         default=True,
         description="是否启用主动私聊巡检。",
         json_schema_extra=_ui(
-            "启用主动私聊", "关闭后麦麦仍维护生活状态，但不会主动找任何用户。", 0,
-            label_en="Enable Proactive Chat", hint_en="Life simulation continues, but Mai will not proactively message users.",
+            "启用主动私聊", "关闭后麦麦仍维护日程和记忆，但不会主动找任何用户。", 0,
+            label_en="Enable Proactive Chat", hint_en="Schedules and memories continue, but Mai will not proactively message users.",
         ),
     )
     patrol_interval_minutes: int = Field(
@@ -966,19 +859,11 @@ class ProactiveSettings(PluginConfigBase):
             label_en="Opportunity Retry Limit", hint_en="How many times one opportunity re-enters the candidate pool after Planner silence or timeout.",
         ),
     )
-    minimum_energy: int = Field(
-        default=25, ge=0, le=100,
-        description="允许普通主动聊天所需的最低精力。",
-        json_schema_extra=_ui(
-            "主动聊天最低精力", "低于该值时麦麦优先休息，不产生普通主动开场。", 5,
-            label_en="Minimum Energy for Proactive Chat", hint_en="Mai prioritizes rest below this energy level.",
-        ),
-    )
     score_threshold: float = Field(
         default=0.45, ge=0, le=2,
         description="主动候选进入 Planner 终审所需的最低综合分。",
         json_schema_extra=_ui(
-            "主动候选分数阈值", "越高越克制。综合考虑契机、精力、心情、关系和用户活跃时间。", 6,
+            "主动候选分数阈值", "越高越克制。综合考虑契机、关系和用户活跃时间。", 6,
             label_en="Proactive Candidate Score Threshold", hint_en="Higher values make proactive behavior more conservative.",
         ),
     )
@@ -1003,14 +888,10 @@ class MaiLifeSettings(PluginConfigBase):
         default_factory=EnvironmentSettings,
         json_schema_extra=_ui("环境与天气", "时区、城市和天气刷新。", 3, label_en="Environment and Weather", hint_en="Timezone, location and weather refresh."),
     )
-    state: StateSettings = Field(
-        default_factory=StateSettings,
-        json_schema_extra=_ui("生活状态", "精力、饥饿、健康和周期。", 4, label_en="Life State", hint_en="Energy, hunger, health and body cycle."),
-    )
     memory: MemorySettings = Field(
         default_factory=MemorySettings,
-        json_schema_extra=_ui("生活记忆", "梦境碎片、抽象日记和重要日期。", 5,
-                              label_en="Life Memory", hint_en="Dream fragments, diary and important dates."),
+        json_schema_extra=_ui("生活记忆", "抽象日记和重要日期。", 5,
+                              label_en="Life Memory", hint_en="Diary and important dates."),
     )
     rest_gate: RestGateSettings = Field(
         default_factory=RestGateSettings,
@@ -1032,11 +913,6 @@ class MaiLifeSettings(PluginConfigBase):
         default_factory=NetworkSettings,
         json_schema_extra=_ui("联网", "总开关、搜索工具、搜索历史、见闻关联、新闻与主动探索。", 11,
                               label_en="Networking", hint_en="Master switch, tool, history, discovery, news and exploration."),
-    )
-    recall: RecallSettings = Field(
-        default_factory=RecallSettings,
-        json_schema_extra=_ui("撤回增强（已移除）", "功能已删除，保留空壳以兼容旧配置。", 99,
-                              label_en="Recall (Removed)", hint_en="Feature removed in v1.24.7."),
     )
     creation: CreationSettings = Field(
         default_factory=CreationSettings,
@@ -1088,10 +964,5 @@ class MaiLifeSettings(PluginConfigBase):
                             ("note_retention_days","search_note_retention_days")):
                 if old in search:net.setdefault(new,search[old])
         if net:data["network"]=net
-        rest=data.get("rest_gate")
-        if isinstance(rest,dict) and "awake_grace_minutes" in rest:
-            state=dict(data.get("state") or {})
-            state.setdefault("awake_grace_minutes",rest["awake_grace_minutes"])
-            data["state"]=state
         return data
 

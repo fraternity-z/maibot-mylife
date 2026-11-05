@@ -20,23 +20,20 @@ class ProactiveEngine:
         if start==end:return False
         return start<=current<end if start<end else current>=start or current<end
 
-    # 软评分只负责排序，额度、睡眠和免打扰仍由硬过滤控制。
-    # 活跃时段与休息积压由 patrol 批量预加载后传入，避免每用户×每契机重复异步查询。
-    def _score(self, user: dict[str,Any], opportunity: dict[str,Any], state: dict[str,Any], now: Any,
-               hours: dict[int,int], backlogs: list[str]) -> float:
+    # 软评分只负责排序，额度和免打扰仍由硬过滤控制。
+    # 活跃时段由 patrol 批量预加载后传入，避免每用户×每契机重复异步查询。
+    def _score(self, user: dict[str,Any], opportunity: dict[str,Any], now: Any,
+               hours: dict[int,int]) -> float:
         score=float(opportunity.get("weight",0))
-        score += max(0,(float(state.get("energy",50))-40)/300)
-        score += max(-0.15,min(0.15,float(state.get("mood_valence",0))*0.12))
         score += float(user.get("temperature",30))/500
         max_count=max(hours.values(),default=0)
         if max_count and hours.get(now.hour,0)>=max_count*0.6: score+=0.12
-        if backlogs: score+=0.05
         last=float(user.get("last_user_message_at",0))
         if last and 2*3600<=now.timestamp()-last<=24*3600: score+=0.08
         return score
 
     # 一次巡检最多选择一个“用户 + 生活契机”交给 Planner。
-    async def patrol(self, now: Any, state: dict[str,Any]) -> bool:
+    async def patrol(self, now: Any) -> bool:
         """先执行额度、休息和间隔硬过滤，再将最高分候选交给 Planner 终审。"""
         cfg=self.config.proactive
         # 自然日按配置时区计算并贯穿全部跳过统计，避免服务器时区不同导致落错日期桶。
@@ -46,20 +43,13 @@ class ProactiveEngine:
         await self.store.expire_pending(
             now.timestamp(),max_retries=int(getattr(cfg,"max_retries_per_opportunity",2) or 0),day=day,
         )
-        if not cfg.enabled or str(state.get("sleep_phase")) in {"falling_asleep","light_sleep","deep_sleep"}: return False
-        if float(state.get("energy",0))<cfg.minimum_energy:
-            # 精力不足属于全局跳过（不区分用户），记一次便于诊断主动发言偏低。
-            await self.store.record_proactive_skip("", "low_energy", now.timestamp(), day=day)
-            return False
+        if not cfg.enabled:return False
         opportunities=await self.store.active_opportunities(now.timestamp())
         if not opportunities:return False
         users=await self.store.list_users(proactive_only=True)
-        # 进入用户循环前一次性预加载全部候选用户的活跃时段与休息积压。
+        # 进入用户循环前一次性预加载全部候选用户的活跃时段。
         hours_map=await self.store.active_hours_batch(
             (str(user.get("user_id") or "") for user in users),now.timestamp()-30*86400,
-        )
-        backlogs_map=await self.store.peek_rest_backlogs_batch(
-            (str(user.get("user_id") or "") for user in users),
         )
         pending_users=await self.store.pending_proactive_users(now.timestamp())
         # 候选按用户独立过滤；定向契机不会进入其他 QQ 用户的评分集合。
@@ -86,8 +76,7 @@ class ProactiveEngine:
                 target=str(opportunity.get("target_user_id") or "")
                 if target and target!=user_id:continue
                 matched+=1
-                score=self._score(user,opportunity,state,now,hours_map.get(user_id,{}),
-                                  backlogs_map.get(user_id,[]))
+                score=self._score(user,opportunity,now,hours_map.get(user_id,{}))
                 if score>=cfg.score_threshold:
                     candidates.append((score,user,opportunity)); added=True
             if matched and not added:

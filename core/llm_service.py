@@ -79,7 +79,6 @@ class LLMService:
             "schedule": models.schedule_task or models.fast_task,
             "scene_detail": models.scene_detail_task or models.fast_task,
             "continuity": models.continuity_task or models.fast_task,
-            "dream": models.dream_task or models.creative_task,
             "diary": models.diary_task or models.creative_task,
             "date_analysis": models.date_analysis_task or models.fast_task,
             "news": models.news_task or models.fast_task,
@@ -98,7 +97,6 @@ class LLMService:
         kinds={"schedule","scene_detail"}
         if self.config.context.enabled and self.config.context.continuity_enabled:kinds.add("continuity")
         if self.config.memory.enabled:
-            kinds.add("dream")
             if self.config.memory.diary_enabled:kinds.add("diary")
             if self.config.memory.date_model_analysis_enabled:kinds.add("date_analysis")
         if self.config.network.enabled:

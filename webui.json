@@ -8,7 +8,7 @@
     {
       "id": "overview",
       "title": "麦麦此刻",
-      "description": "实时生活状态、情绪罗盘、72h 轨迹、今日日程与 Token 监控",
+      "description": "日常近况、当前位置、生活场景、今日日程与 Token 监控",
       "placement": "workspace",
       "icon": "chart",
       "mode": "custom",
@@ -17,10 +17,6 @@
       "queries": {
         "status": {
           "api": "webui_status_overview",
-          "version": "1"
-        },
-        "history": {
-          "api": "webui_status_history",
           "version": "1"
         },
         "schedule": {
@@ -36,7 +32,7 @@
     {
       "id": "life",
       "title": "记忆与牵挂",
-      "description": "社交关系温度、重要日期、日记与梦境手账、书柜作品与联网见闻",
+      "description": "社交关系温度、重要日期、日常手账、书柜作品与联网见闻",
       "placement": "sidebar",
       "icon": "puzzle",
       "mode": "custom",

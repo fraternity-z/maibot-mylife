@@ -18,11 +18,11 @@ core/__init__.py core/environment.py core/llm_service.py core/storage.py core/ne
 creation/__init__.py creation/bookshelf_service.py creation/creation_service.py creation/inspiration_service.py
 information/__init__.py information/host_search.py information/http_client.py
 information/information_service.py information/news_service.py
-life/__init__.py life/bedtime.py life/continuity.py life/life_state.py life/memory_service.py
+life/__init__.py life/continuity.py life/memory_service.py
 life/proactive.py life/rest_gate.py life/schedule_service.py
 management/__init__.py management/admin_service.py
 messaging/__init__.py messaging/adapter_compat.py messaging/command_catalog.py messaging/command_reply.py
-messaging/message_pipeline.py messaging/prompt_builder.py messaging/recall_service.py messaging/task_context.py
+messaging/message_pipeline.py messaging/prompt_builder.py messaging/task_context.py
 social/__init__.py social/group_observer.py social/relay_service.py
 webui/overview.html webui/life.html webui/system.html
 """.split()

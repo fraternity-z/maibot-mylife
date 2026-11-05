@@ -500,7 +500,7 @@
     context: { title: '上下文注入与连续性 (context)', badge: '管线' },
     rest_gate: { title: '私聊工作时间 (rest_gate)', badge: '回复' },
     group: { title: '群聊回复与观察 (group)', badge: '群聊' },
-    memory: { title: '记忆：梦境/日记/日期 (memory)', badge: '记忆' },
+    memory: { title: '记忆：日记/日期 (memory)', badge: '记忆' },
     network: { title: '联网见闻与搜索 (network)', badge: '联网' },
     creation: { title: '书柜与自主创作 (creation)', badge: '创作' },
     schedule: { title: '每日日程生成 (schedule)', badge: '日程' },
@@ -541,10 +541,6 @@
     inactivity_hours: '群冷场判定小时',
     group_share_daily_max: '每日群分享上限',
     group_share_min_interval_minutes: '群分享最小间隔(分)',
-    dream_fragments_enabled: '梦境碎片开关',
-    dream_fragment_count: '单次梦境碎片数',
-    dream_probability: '苏醒做梦概率',
-    dream_weekly_max: '每周做梦上限',
     diary_enabled: '每日日记开关',
     diary_hour: '日记生成整点(时)',
     diary_max_chars: '日记最大字数',
@@ -567,7 +563,6 @@
     search_daily_max: '每日自主搜索上限',
     plaintext_storage_acknowledged: '明文入库知情确认',
     daily_max: '每日创作归档上限',
-    minimum_energy: '触发最低精力阈值',
     public_works_enabled: '允许公开作品',
     inspiration_lookback_days: '灵感回溯天数',
     external_reading_enabled: '外部阅读笔记开关',
@@ -732,7 +727,7 @@
         <div style="font-size:12px;color:var(--ml-muted);line-height:1.5;">
           私聊：${esc(rg.work_start)}–${esc(rg.work_end)}，时段内必回；
           群聊：${esc(gp.work_start)}–${esc(gp.work_end)}，概率 ${esc(gp.reply_probability)}。
-          起止相同表示全天，支持跨午夜。群聊每条消息独立抽取一次，关键词和睡眠状态不改变回复策略。
+          起止相同表示全天，支持跨午夜。群聊每条消息独立抽取一次，日程活动不改变回复策略。
         </div>
       </div>
     `;

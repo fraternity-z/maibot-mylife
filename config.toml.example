@@ -26,13 +26,13 @@
 
 [plugin]
 # 配置结构版本，请勿手动修改。
-config_version = "1.14.0"
+config_version = "1.15.0"
 
 # 插件总开关。关闭后保留数据库，但停止状态维护、日程生成和主动消息。
 enabled = true
 
 
-# 管理员无需同时创建用户档案即可使用菜单和管理诊断；关系、撤回摘要和重要日期仍需启用用户档案。
+# 管理员无需同时创建用户档案即可使用菜单和管理诊断；关系和重要日期仍需启用用户档案。
 # 留空时，第一个有效私聊用户自动成为管理员。
 # 示例：admin_user_ids = ["123456789", "987654321"]
 admin_user_ids = []
@@ -134,39 +134,9 @@ city = "Shanghai"
 weather_refresh_minutes = 30
 
 
-[state]
-# 被叫醒后的生活状态维持时间，不影响回复策略。
-awake_grace_minutes = 30
-
-# 生活状态推进间隔，范围 1～60 分钟。推荐 10 分钟。
-tick_interval_minutes = 10
-
-# 身体周期模拟默认关闭。只有符合麦麦人设时才建议开启。
-body_cycle_enabled = false
-
-# 周期第 1 天，格式 YYYY-MM-DD；关闭周期时可以留空字符串。
-body_cycle_start_date = ""
-
-# 完整周期长度，范围 20～45 天。
-body_cycle_length_days = 28
-
-# 经期持续天数，范围 1～10 天。
-body_cycle_period_days = 5
-
-
 [memory]
 # 离线生活记忆默认开启；关闭总开关不会删除已有数据。
 enabled = true
-dream_fragments_enabled = true
-dream_fragment_count = 3
-
-# 每个合格夜晚醒来后实际生成梦境的概率，0～1。
-# 0.35 约每周 2～3 次；0 永不做梦，1 每晚必做。午睡和短睡路径不掷骰。
-dream_probability = 0.35
-
-# 近 7 天已落库梦境数上限，范围 0～7；0 表示不限制，只靠上方概率单旋钮。
-# 达到上限的当晚直接跳过做梦，是对冲连彩的可选保险。
-dream_weekly_max = 0
 diary_enabled = true
 diary_hour = 2
 diary_max_chars = 1200
@@ -198,7 +168,7 @@ outbound_turn_guard = true
 # 轮次锁过期时间（秒）；发送失败时会提前释放。
 turn_expire_seconds = 120
 
-# 慢变背景（记忆/见闻/书柜/梦境）按用户缓存的分钟数；0 = 每轮实时读取。
+# 慢变背景（记忆/见闻/书柜）按用户缓存的分钟数；0 = 每轮实时读取。
 background_cache_minutes = 5
 
 # 回复层（Replyer）背景详略：full = 完整（默认，行为不变）；compact = 精简
@@ -236,7 +206,7 @@ template_file = "mai_template.json"
 
 
 [proactive]
-# 主动私聊总开关。关闭后仍会维护生活状态和日程。
+# 主动私聊总开关。关闭后仍会维护日程和生活记忆。
 enabled = true
 
 # 检查主动契机的间隔，范围 1～60 分钟。
@@ -250,9 +220,6 @@ recent_user_silence_minutes = 30
 
 # 主动触发与 Replyer 实际回复的确认窗口，单位秒。通常无需修改。
 pending_expire_seconds = 120
-
-# 麦麦低于该精力值时不会进行普通主动聊天。
-minimum_energy = 25
 
 # 主动候选进入 Planner 终审所需的最低综合分。越高越克制。
 score_threshold = 0.45

@@ -5,7 +5,6 @@ import asyncio
 import hashlib
 import json
 import random
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -91,15 +90,15 @@ class ScheduleService:
 
     def _fallback(self, day: str, weekend: bool) -> list[dict[str, Any]]:
         builtin=[
-            {"start":"00:00","end":"08:00","kind":"sleep","summary":"安稳睡觉","location":"卧室","energy_load":8,"shareability":0.05},
-            {"start":"08:00","end":"09:00","kind":"meal","summary":"起床洗漱并吃早餐","location":"家里","energy_load":-1,"shareability":0.25},
-            {"start":"09:00","end":"12:00","kind":"work","summary":"处理积压的私信和待办清单","location":"书桌前","energy_load":-4,"shareability":0.25},
-            {"start":"12:00","end":"13:00","kind":"meal","summary":"准备午饭","location":"厨房","energy_load":-1,"shareability":0.4},
-            {"start":"13:00","end":"13:40","kind":"nap","summary":"短暂午休","location":"卧室","energy_load":3,"shareability":0.05},
-            {"start":"13:40","end":"18:00","kind":"study","summary":"整理这周的读书笔记和课程作业","location":"书桌前","energy_load":-5,"shareability":0.25},
-            {"start":"18:00","end":"19:00","kind":"meal","summary":"做晚饭","location":"厨房","energy_load":-1,"shareability":0.55},
-            {"start":"19:00","end":"23:30","kind":"leisure","summary":"拼完上次没拼完的拼图","location":"家里","energy_load":-3,"shareability":0.55},
-            {"start":"23:30","end":"24:00","kind":"sleep","summary":"准备睡觉","location":"卧室","energy_load":1,"shareability":0.05},
+            {"start":"00:00","end":"08:00","kind":"sleep","summary":"安稳睡觉","location":"卧室","shareability":0.05},
+            {"start":"08:00","end":"09:00","kind":"meal","summary":"起床洗漱并吃早餐","location":"家里","shareability":0.25},
+            {"start":"09:00","end":"12:00","kind":"work","summary":"处理积压的私信和待办清单","location":"书桌前","shareability":0.25},
+            {"start":"12:00","end":"13:00","kind":"meal","summary":"准备午饭","location":"厨房","shareability":0.4},
+            {"start":"13:00","end":"13:40","kind":"nap","summary":"短暂午休","location":"卧室","shareability":0.05},
+            {"start":"13:40","end":"18:00","kind":"study","summary":"整理这周的读书笔记和课程作业","location":"书桌前","shareability":0.25},
+            {"start":"18:00","end":"19:00","kind":"meal","summary":"做晚饭","location":"厨房","shareability":0.55},
+            {"start":"19:00","end":"23:30","kind":"leisure","summary":"拼完上次没拼完的拼图","location":"家里","shareability":0.55},
+            {"start":"23:30","end":"24:00","kind":"sleep","summary":"准备睡觉","location":"卧室","shareability":0.05},
         ]
         template=self._template(); key="weekend" if weekend else "workday"; raw=template.get(key)
         # 模板即使是数组也可能缺睡眠或进餐；校验失败必须回到稳定内置骨架。
@@ -129,18 +128,6 @@ class ScheduleService:
                 node["summary"]=summary; node["location"]=location
             result.append(node)
         return result
-
-    def _state_summary(self, state: dict[str, Any] | None) -> str:
-        """把当前精力/饥饿/心情浓缩成一句中文提示，供日程生成参考。"""
-        if not isinstance(state,dict): return ""
-        try:
-            energy=float(state.get("energy",70)); hunger=float(state.get("hunger",20)); mood=float(state.get("mood_valence",0))
-        except (TypeError,ValueError): return ""
-        hunger_note="（很高，最近经常饿）" if hunger>75 else ""
-        energy_note="（很低，需要多休息）" if energy<30 else ""
-        mood_note="（偏低）" if mood<-0.3 else ""
-        return (f"{self.bot_name}当前状态：精力 {energy:.0f}/100{energy_note}，饥饿 {hunger:.0f}/100{hunger_note}，"
-                f"心情 {mood:+.2f}{mood_note}。生成日程时请保证正常三餐、不要安排过高强度。")
 
     @staticmethod
     def _apply_memory_hints(day:str,nodes:list[dict[str,Any]],memory_context:dict[str,Any]|None)->list[dict[str,Any]]:
@@ -176,7 +163,7 @@ class ScheduleService:
         return None
 
     # 所有 LLM 日程必须经过时间、类型、重叠和必要节点校验。
-    def _validate(self, day: str, raw: Any, state: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def _validate(self, day: str, raw: Any) -> list[dict[str, Any]]:
         """规范化节点、修复可安全修复的重叠，并拒绝缺少夜间睡眠或进餐的框架。"""
         if not isinstance(raw,list): return []
         cleaned=[]
@@ -190,11 +177,9 @@ class ScheduleService:
             kind=str(item.get("kind") or "leisure").lower(); kind=kind if kind in _ALLOWED else "leisure"
             summary=str(item.get("summary") or item.get("activity") or "自由活动")[:160]
             location=str(item.get("location") or "家里")[:80]
-            try: energy=max(-12.0,min(12.0,float(item.get("energy_load",0))))
-            except (TypeError,ValueError): energy=0
             try: share=max(0,min(1,float(item.get("shareability",0.3))))
             except (TypeError,ValueError): share=0.3
-            cleaned.append({"start_minute":start,"end_minute":end,"kind":kind,"summary":summary,"location":location,"energy_load":energy,"shareability":share})
+            cleaned.append({"start_minute":start,"end_minute":end,"kind":kind,"summary":summary,"location":location,"shareability":share})
         # 排序后只向后推迟重叠节点，绝不把后段改回已经过去的时间。
         cleaned.sort(key=lambda x:x["start_minute"])
         result=[]; last_end=-1
@@ -210,19 +195,7 @@ class ScheduleService:
             for item in result if item["kind"]=="sleep"
         )
         meals=sum(x["kind"]=="meal" for x in result)
-        # 饥饿偏高时要求三餐齐全，避免少餐框架把饥饿锁在告警区。
-        hungry=float((state or {}).get("hunger",0) or 0)>75
-        if hungry and meals<3: return []
         return result if night_sleep>=5*60 and meals>=2 else []
-
-    @staticmethod
-    def _state_deltas(node:dict[str,Any])->dict[str,float]:
-        """节点完成数值由本地规则给出，不接受模型任意改写核心状态。"""
-        kind=str(node.get("kind") or "leisure")
-        try:energy=max(-12.0,min(12.0,float(node.get("energy_load") or 0)))
-        except (TypeError,ValueError):energy=0.0
-        return {"energy":energy,"hunger":-35.0 if kind=="meal" else 0.0,
-                "mood_valence":0.03 if kind=="leisure" else 0.0,"mood_arousal":0.0}
 
     # LLM 失败或结果不合格时使用模板骨架，保证日程服务始终可用。
     # 生成前收集三个变化源：最近几天日程、历法背景、兴趣素材；避免每天照抄模板。
@@ -247,7 +220,6 @@ class ScheduleService:
         if existing and not force: return existing
         # 人格串是身份的唯一来源：刷新到实例，回落模板与提示词都按它定向。
         self._personality=str(personality or "")
-        state=await self.store.get_state()
         weekend=now.weekday()>=5; fallback=self._apply_memory_hints(day,self._fallback(day,weekend),memory_context)
         variety=await self._variety_context(now)
         calendar_bits=[str(environment.get(key)) for key in ("day_type","holiday","lunar","solar_term","upcoming_festival")
@@ -275,9 +247,8 @@ class ScheduleService:
         prompt=(f"为虚拟网友{self.bot_name}生成{day}的生活框架。{'周末' if weekend else '工作日'}，天气背景：{weather_text}。\n"
                 f"人格：{personality or '自然、独立、有自己的生活'}\n"
                 f"身份落实：{self._identity_note(personality)}\n"
-                f"{self._state_summary(state)}\n"
                 f"参考节奏（只参考时间结构和比例，禁止照抄里面的描述）："
-                f"{json.dumps(self._template().get('weekend' if weekend else 'workday',[]),ensure_ascii=False)}\n"
+                f"{json.dumps(fallback,ensure_ascii=False)}\n"
                 f"匿名生活记忆：{json.dumps(memory_context or {},ensure_ascii=False)}。日期提示不含用户身份，不得猜测是谁。"
                 f"{variety}\n"
                 "要求：\n"
@@ -287,20 +258,18 @@ class ScheduleService:
                 "自由创作者写约稿/创作方向），location 与身份匹配（学生多用学校、图书馆、食堂、宿舍，"
                 "职场多用公司、工位）；休闲段每天至少有一件事与最近几天不同；\n"
                 "3) 节假日、节气、农历和天气要自然反映在活动里；\n"
-                "4) 日程应符合普通人的时间、精力和生活常识，不安排突兀的高强度事项，时间不重叠，包含夜间睡眠和至少两顿饭；\n"
-                "5) energy_load 是该节点对全天精力的影响合计值：工作/学习 -2~-6，睡眠 +4~+8，餐饮 -1，休闲 -1~-3，"
-                "出行 -2~-4；全天 energy_load 合计应与当天精力消耗相抵（接近 0），睡眠增益不要重复计算白天消耗。\n"
-                "返回JSON数组。字段必须是start,end,kind,summary,location,energy_load,shareability。"
+                "4) 日程应符合普通人的时间和生活常识，不安排突兀的高强度事项，时间不重叠，包含夜间睡眠和至少两顿饭。\n"
+                "返回JSON数组。字段必须是start,end,kind,summary,location,shareability。"
                 "kind只能是meal/work/study/travel/leisure/sleep/nap/rest。")
         nodes=[]
         if self.llm.task_available("schedule"):
             raw=await self._generate_with_retry(prompt,"你是生活日程规划器，只输出合法JSON数组。",fallback,
                 task_kind="schedule",request_type="daily_schedule",
-                check=lambda item: bool(self._validate(day,item,state)))
+                check=lambda item: bool(self._validate(day,item)))
             if raw is None:
                 self.logger.warning("[MaiLife] 日程生成重试后仍不合格，使用兜底模板")
                 raw=fallback
-            nodes=self._validate(day,raw,state)
+            nodes=self._validate(day,raw)
         if not nodes:nodes=fallback
         await self.store.replace_framework(day,nodes); return await self.store.get_framework(day)
 
@@ -314,18 +283,18 @@ class ScheduleService:
         return current,nxt
 
     # 只细化临近节点，减少模型调用并保持场景与最新环境一致。
-    async def expand_due(self, now: datetime, nodes: list[dict[str, Any]], state: dict[str, Any], weather_text: str) -> None:
-        """细化当前与下一节点；状态增量始终由本地规则生成，模型只写叙事和机会。"""
+    async def expand_due(self, now: datetime, nodes: list[dict[str, Any]], weather_text: str) -> None:
+        """细化当前与下一节点，只生成日常叙事和分享机会。"""
         minute=now.hour*60+now.minute; lead=self.config.schedule.detail_lead_minutes
         due=[n for n in nodes if n["end_minute"]>minute and n["start_minute"]<=minute+lead][:2]
         for node in due:
             if await self.store.get_scene(node["id"]): continue
             expires=datetime.combine(now.date(),datetime.min.time(),tzinfo=now.tzinfo)+timedelta(minutes=node["end_minute"])
-            fallback={"scene":node["summary"],"state_deltas":self._state_deltas(node),
+            fallback={"scene":node["summary"],
                       "opportunities":([{"topic":node["summary"],"motive":"想自然分享一点正在经历的生活","weight":node["shareability"],"privacy":"normal"}] if node["shareability"]>=0.35 else [])}
             prompt=(f"把生活框架细化为具体但克制的场景。框架：{json.dumps(node,ensure_ascii=False)}\n"
                     f"人格：{self._personality or '自然、独立、有自己的生活'}\n"
-                    f"当前精力{state.get('energy')}、饥饿{state.get('hunger')}、天气{weather_text}。\n"
+                    f"天气：{weather_text}。\n"
                     "返回JSON对象：scene字符串和opportunities数组。机会字段topic,motive,weight。"
                     "场景必须与人格身份一致（学生写在校场景，职场写工位场景），不要凭空制造重大事件，不要强行想用户。")
             raw=await self._generate_with_retry(prompt,"你是日常场景细化器，只返回JSON对象。",fallback,
@@ -335,7 +304,6 @@ class ScheduleService:
                 self.logger.warning("[MaiLife] 场景细化重试后仍不合格，使用兜底场景")
                 raw=fallback
             scene=str(raw.get("scene") or fallback["scene"])[:500]
-            deltas=self._state_deltas(node)
             opportunities=[]
             for idx,item in enumerate(raw.get("opportunities") or []):
                 if not isinstance(item,dict): continue
@@ -345,46 +313,7 @@ class ScheduleService:
                 opportunities.append({"id":op_id,"topic":str(item.get("topic") or node["summary"])[:160],
                     "motive":str(item.get("motive") or "想分享生活")[:240],"weight":weight,
                     "privacy":"normal","expires_at":expires.timestamp()})
-            await self.store.save_scene(node["id"],scene,deltas,opportunities)
-
-    async def state_timeline(self,start:datetime,end:datetime)->list[dict[str,Any]]:
-        """按日程边界切分离线时间；缺失的过去日程只使用本地模板，场景按 ID 批量读取。"""
-        if end<=start:return []
-        windows=[]; day=start.date()
-        while day<=end.date():
-            day_start=datetime.combine(day,datetime.min.time(),tzinfo=end.tzinfo)
-            next_day=datetime.combine(day+timedelta(days=1),datetime.min.time(),tzinfo=end.tzinfo)
-            window_start=max(start,day_start); window_end=min(end,next_day)
-            if window_end<=window_start:day+=timedelta(days=1); continue
-            stored=await self.store.get_framework(day.isoformat())
-            nodes=stored or self._fallback(day.isoformat(),day.weekday()>=5)
-            windows.append((window_start,window_end,day_start,stored,nodes))
-            day+=timedelta(days=1)
-        # 先收集窗口内所有已存储框架的节点 ID，再一次性查询场景，消除每节点一次 get_scene。
-        scene_map=await self.store.get_scenes_by_framework_ids(
-            node["id"] for _window_start,_window_end,_day_start,stored,nodes in windows if stored
-            for node in nodes
-        )
-        spans=[]
-        for window_start,window_end,day_start,stored,nodes in windows:
-            cursor=window_start
-            for node in nodes:
-                node_start=day_start+timedelta(minutes=int(node["start_minute"]))
-                node_end=day_start+timedelta(minutes=int(node["end_minute"]))
-                if node_end<=window_start or node_start>=window_end:continue
-                span_start=max(window_start,node_start); span_end=min(window_end,node_end)
-                if cursor<span_start:
-                    spans.append({"start":cursor,"end":span_start,"segment":{"kind":"leisure","summary":"自由活动","location":"家里"}})
-                scene=scene_map.get(str(node["id"]),{}) if stored else {}
-                completion={}
-                if node_end<=end and node_end>start:
-                    if scene and not int(scene.get("applied") or 0):completion={"framework_id":str(node["id"]),"deltas":self._state_deltas(node)}
-                    elif not scene:completion={"framework_id":"","deltas":self._state_deltas(node)}
-                spans.append({"start":span_start,"end":span_end,"segment":node,"completion":completion})
-                cursor=max(cursor,span_end)
-            if cursor<window_end:
-                spans.append({"start":cursor,"end":window_end,"segment":{"kind":"leisure","summary":"自由活动","location":"家里"}})
-        return spans
+            await self.store.save_scene(node["id"],scene,opportunities)
 
     async def context(self, now: datetime) -> dict[str, Any]:
         """返回今日框架、当前/下一节点和当前节点唯一的细化场景。"""

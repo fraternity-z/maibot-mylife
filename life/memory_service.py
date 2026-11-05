@@ -200,17 +200,16 @@ class MemoryService:
             await self._generate_diary(now,day)
 
     async def _generate_diary(self,now:datetime,target:date)->None:
-        """仅聚合麦麦自身场景、梦境和匿名互动计数，生成不含聊天原句的日记。"""
+        """仅聚合麦麦自身场景和匿名互动计数，生成不含聊天原句的日记。"""
         day=target.isoformat(); start,end=self._day_bounds(now,target)
-        scenes=await self.store.scenes_for_day(day); dreams=await self.store.dreams_between(start,end)
+        scenes=await self.store.scenes_for_day(day)
         interactions=await self.store.interaction_counts(start,end)
         total_interactions=sum(int(item.get("count") or 0) for item in interactions)
         active_users=len({str(item.get("user_id") or "") for item in interactions if item.get("user_id")})
         life=[{"kind":item.get("kind"),"summary":item.get("summary"),"location":item.get("location"),
                "scene":item.get("scene") or ""} for item in scenes]
-        dream_text=[{"summary":item.get("content"),"fragments":item.get("fragments") or []} for item in dreams]
         # 输入模型的互动信息只有总量和人数，避免日记成为另一份私聊记录。
-        source={"day":day,"life":life,"dreams":dream_text,
+        source={"day":day,"life":life,
                 "interaction_counts":{"total":total_interactions,"active_people":active_users}}
         serialized=json.dumps(source,ensure_ascii=False,sort_keys=True); digest=hashlib.sha256(serialized.encode()).hexdigest()
         summaries=[str(item.get("summary") or "") for item in life if item.get("summary")]
