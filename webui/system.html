@@ -471,12 +471,13 @@
     </div>
   </section>
 
-  <!-- 全量配置只读透视面板 -->
+  <!-- 全量配置透视面板 -->
   <section class="ml-card" id="sec-config">
     <div class="ml-card-header">
-      <h2 class="ml-card-title">全量只读配置透视 (13 个配置节)</h2>
+      <h2 class="ml-card-title">全量配置透视</h2>
       <input type="search" class="ml-input" id="cfg-search-input" placeholder="搜索配置节或参数名（如 reply_probability / work_start / 概率）…"/>
     </div>
+    <p style="font-size:12px;color:var(--ml-muted);">新闻源列表请在宿主插件设置中选择，或参考 config.toml.example 修改 network.news_sources。</p>
     <div class="ml-cfg-grid" id="cfg-cards-grid">
       <div class="ml-empty">正在读取配置摘要…</div>
     </div>
@@ -502,7 +503,6 @@
     group: { title: '群聊回复与观察 (group)', badge: '群聊' },
     memory: { title: '记忆：日记/日期 (memory)', badge: '记忆' },
     network: { title: '联网见闻与搜索 (network)', badge: '联网' },
-    creation: { title: '书柜与自主创作 (creation)', badge: '创作' },
     reading: { title: '小说阅读 (reading)', badge: '阅读' },
     proactive: { title: '主动私聊巡检 (proactive)', badge: '主动' },
     usage: { title: '用量统计保留 (usage)', badge: '审计' },
@@ -559,23 +559,11 @@
     context_item_limit: '注入见闻条数上限',
     news_enabled: '定时新闻采集开关',
     news_daily_max: '每日新闻采集上限',
+    news_sources: '内置新闻源',
     search_enabled: '自主探索搜索开关',
     search_daily_max: '每日自主搜索上限',
-    plaintext_storage_acknowledged: '明文入库知情确认',
-    daily_max: '每日创作归档上限',
-    public_works_enabled: '允许公开作品',
-    inspiration_lookback_days: '灵感回溯天数',
-    external_reading_enabled: '外部阅读笔记开关',
     patrol_interval_minutes: '后台巡检间隔(分)',
     'proactive.patrol_interval_minutes': '主动判断与发送间隔（分）',
-    continuation_enabled: '长篇连载续写开关',
-    continuation_probability: '巡检续写触发概率',
-    continuation_min_gap_days: '续写最小间隔天数',
-    continuation_max_chapters: '单作品最大章节数',
-    continuation_stale_days: '连载断更判定天数',
-    continuation_work_types: '允许续写体裁',
-    continuation_context_chapters: '续写携带前文章节数',
-    continuation_chapter_tail_chars: '前文章节尾部截取字数',
     'reading.enabled': '启用小说阅读',
     'reading.directory': '小说目录（插件目录内）',
     'reading.chunk_chars': '每次阅读字符数',
@@ -639,7 +627,7 @@
       <div class="ml-kpi-tile">
         <div class="ml-kpi-label">插件版本</div>
         <div class="ml-kpi-value">v${esc(ov.version || '—')}</div>
-        <div class="ml-kpi-sub">社交 ${esc(ov.social_enabled)} · 创作 ${esc(ov.creation_enabled)} · 联网 ${esc(ov.network_enabled)}</div>
+        <div class="ml-kpi-sub">社交 ${esc(ov.social_enabled)} · 联网 ${esc(ov.network_enabled)}</div>
       </div>
       <div class="ml-kpi-tile">
         <div class="ml-kpi-label">建档用户 / 主人</div>
@@ -652,9 +640,9 @@
         <div class="ml-kpi-sub">Host Planner 异步终审中</div>
       </div>
       <div class="ml-kpi-tile">
-        <div class="ml-kpi-label">书柜文档 (私密)</div>
+        <div class="ml-kpi-label">日记与阅读笔记 (私密)</div>
         <div class="ml-kpi-value">${ov.bookshelf_documents ?? 0} (${ov.private_documents ?? 0})</div>
-        <div class="ml-kpi-sub">含生活随笔与阅读笔记</div>
+        <div class="ml-kpi-sub">保留实际活动日记与阅读批注</div>
       </div>
       <div class="ml-kpi-tile">
         <div class="ml-kpi-label">今日 Token (调用数)</div>
@@ -735,7 +723,7 @@
       </div>
     `;
 
-    // 2. Render 13 Config Sections with keyword filter（editable 是回写清单，不当配置节渲染）
+    // 2. Render Config Sections with keyword filter（editable 是回写清单，不当配置节渲染）
     const EDITABLE = cfg.editable || {};
     const q = state.cfgSearch.trim().toLowerCase();
     const grid = document.getElementById('cfg-cards-grid');

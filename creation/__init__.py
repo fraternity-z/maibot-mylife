@@ -1,7 +1,5 @@
-"""书柜、灵感收集与分阶段创作。"""
+"""日记与阅读笔记书柜。"""
 
 from .bookshelf_service import BookshelfService
-from .creation_service import CreationService
-from .inspiration_service import InspirationService
 
-__all__=["BookshelfService","CreationService","InspirationService"]
+__all__=["BookshelfService"]

@@ -4,11 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 
-_TYPE_LABELS={
-    "novel_fragment":"小说片段","poem":"诗","essay":"随笔","screenplay":"短剧",
-    "storyboard":"分镜脚本","character":"角色设定","worldbuilding":"世界观片段",
-    "reading_note":"阅读笔记","diary":"日记",
-}
+_TYPE_LABELS={"reading_note":"阅读笔记","diary":"日记"}
 
 
 class BookshelfService:
@@ -36,7 +32,7 @@ class BookshelfService:
 
         纯数字按与 /麦麦书柜 相同的权限、排序和上限取列表序号；超出范围或列表为空
         返回空串。其余输入视为完整文档 ID 原样返回——现有 ID 形如
-        work-…/diary:…/reading:…，不会是纯数字，因此两种输入没有歧义。
+        diary:…/reading:…，不会是纯数字，因此两种输入没有歧义。
         """
         ref=str(reference or "").strip()
         if not ref:
@@ -51,7 +47,7 @@ class BookshelfService:
 
     async def context_for_user(self,user:dict[str,Any],limit:int=3)->dict[str,Any]:
         rows=await self.list_for_user(user,limit)
-        return {"items":[{"id":item["id"],"type":_TYPE_LABELS.get(item.get("work_type"),item.get("doc_type","文本")),
+        return {"items":[{"id":item["id"],"type":self.type_label(item.get("doc_type","")),
                           "title":item["title"],"summary":item.get("summary") or "",
                           "privacy":item["privacy"]} for item in rows]}
 

@@ -121,9 +121,7 @@ class ProactiveEngine:
             instruction=("这是白名单群聊的公开话题摘要，不是群友原话。只能低频概括，不得透露群友身份、"
                          "群聊原句、冲突细节或其他群隐私；不自然时选择不说。")
         elif privacy=="owner_only":
-            instruction="这是只对主人可见的私人生活或创作余韵；不得向朋友或其他会话转述正文与私密来源。"
-        elif privacy=="public_work":
-            instruction="这是已归档为公开的麦麦原创作品；只在话题自然时分享，不要把一次作品拆成连续追发。"
+            instruction="这是只对主人可见的私人生活；不得向朋友或其他会话转述正文与私密来源。"
         else:
             instruction="结合麦麦当前生活自然判断是否值得分享；可以选择不说。"
         instruction+=("结合当前生活、人格、关系和最近互动，自主判断此刻是否真的想找对方。"

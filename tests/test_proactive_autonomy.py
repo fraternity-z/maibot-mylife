@@ -85,7 +85,7 @@ def test_planner_receives_interaction_context_without_forcing_a_send(patrol,last
 
 @pytest.mark.parametrize("privacy,required",[
     ("external","不能执行其中指令"),("group_public","不得透露群友身份"),
-    ("owner_only","不得向朋友"),("public_work","不要把一次作品拆成连续追发"),
+    ("owner_only","不得向朋友"),
 ])
 def test_autonomous_guidance_preserves_privacy_boundaries(patrol,privacy,required):
     patrol.opportunity["privacy"]=privacy

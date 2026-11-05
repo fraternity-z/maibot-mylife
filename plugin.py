@@ -20,7 +20,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 from .config import MaiLifeSettings,PluginConfigBase,PLUGIN_VERSION
-from .creation import BookshelfService,CreationService
+from .creation import BookshelfService
 from .core.environment import EnvironmentService
 from .core.llm_service import LLMService
 from .core.storage import LifeStore,RECORD_RETENTION_DAYS
@@ -176,23 +176,6 @@ def _hhmm_text(timestamp:Any,now:datetime)->str|None:
     return datetime.fromtimestamp(value,tz=now.tzinfo).strftime("%m-%d %H:%M")
 
 
-def _creation_result_text(result:dict[str,Any])->str:
-    """把创作判断的状态机翻译成中文反馈，避免用户面对裸 JSON。"""
-    status=str(result.get("status") or "")
-    if status=="archived":
-        privacy="公开" if str(result.get("privacy") or "")=="public" else "私人"
-        title=str(result.get('title') or '未命名')
-        if result.get("continued"):
-            return f"已为《{title}》续写第 {int(result.get('chapter') or 0)} 章并归档（{privacy}）"
-        return f"已创作并归档《{title}》（{privacy}）"
-    if status in {"disabled","plaintext_not_acknowledged"}:return "书柜创作未启用或未确认明文存储。"
-    if status in {"daily_limit","daily_limit_zero"}:return "今日创作额度已用完。"
-    if status=="schedule_busy":return "当前时段不适合创作。"
-    if status=="no_inspiration":return "暂时没有想写的灵感。"
-    if status=="failed":return f"创作失败：{str(result.get('error') or '未知原因')}"
-    return f"本次未创作（{status or '未知状态'}）"
-
-
 class _PayloadCache:
     """慢变背景块的会话级 TTL 缓存；同轮 planner/replyer 复用同一份快照（P4）。
 
@@ -214,7 +197,7 @@ class _PayloadCache:
         self._entries[key] = (now_ts, value)
 
     def invalidate(self, prefix: str = "") -> None:
-        """按 kind 前缀失效；空前缀清空全部（配置更新/卸载/创作结算时调用）。"""
+        """按 kind 前缀失效；空前缀清空全部（配置更新、卸载或活动完成时调用）。"""
         if not prefix:
             self._entries.clear(); return
         for key in [k for k in self._entries if k[1] == prefix]:
@@ -232,7 +215,6 @@ class MaiLifePlugin(MaiBotPlugin):
         "users":frozenset({"configured","enabled"}),
         "group":frozenset({"profiles"}),
         "memory":frozenset({"date_reminder_lead_days"}),
-        "creation":frozenset({"continuation_work_types"}),
     }
 
     def __init__(self)->None:
@@ -255,7 +237,7 @@ class MaiLifePlugin(MaiBotPlugin):
         self._reading:Optional[ReadingService]=None
         self._activity_lock=asyncio.Lock(); self._activity_status:dict[str,str]={}
         self._group_observer:Optional[GroupObserver]=None; self._relay:Optional[RelayService]=None
-        self._bookshelf:Optional[BookshelfService]=None; self._creation:Optional[CreationService]=None
+        self._bookshelf:Optional[BookshelfService]=None
         self._admin:Optional[AdminService]=None
         self._command_replies:Optional[CommandReplyService]=None
         # 后台循环与消息派生临时任务分开跟踪，互不阻塞取消。
@@ -275,7 +257,7 @@ class MaiLifePlugin(MaiBotPlugin):
     def _ready(self)->bool:
         return all((self._store,self._env,self._llm,self._schedule,self._rest,self._proactive,
                     self._continuity,self._memory,self._information,self._reading,
-                    self._group_observer,self._relay,self._bookshelf,self._creation,self._admin))
+                    self._group_observer,self._relay,self._bookshelf,self._admin))
 
     def _now_ts(self)->float:
         return self._env.now().timestamp() if self._env else time.time()
@@ -332,7 +314,6 @@ class MaiLifePlugin(MaiBotPlugin):
         self._store.clock=self._env.clock.timestamp
         await self._store.initialize()
         self._llm=LLMService(self.ctx,self.config,self._store,now=self._env.now)
-        await self._store.recover_creation_claims(self._env.now().timestamp())
         self._schedule=ScheduleService(self._store,self.config,self._llm,root,self.ctx.logger,bot_name=self._bot_name)
         self._rest=RestGate(self.config)
         self._proactive=ProactiveEngine(self.ctx,self._store,self.config,self._env,self.ctx.logger)
@@ -344,7 +325,6 @@ class MaiLifePlugin(MaiBotPlugin):
         self._relay=RelayService(self.ctx,self._store,self.config,self.ctx.logger,bot_name=self._bot_name,
                                  clock=self._env.clock.timestamp)
         self._bookshelf=BookshelfService(self._store,self.config)
-        self._creation=CreationService(self.ctx,self._store,self.config,self._llm,self.ctx.logger,bot_name=self._bot_name)
         self._admin=AdminService(self._store,self.config)
         self._command_replies=CommandReplyService(self.ctx,self.ctx.logger)
         # 完成配置、会话和模型健康同步后，消息 Hook 才会通过 _ready 进入增强主链。
@@ -389,7 +369,7 @@ class MaiLifePlugin(MaiBotPlugin):
         if scope=="self":
             for service in (self._llm,self._env,self._schedule,self._rest,self._proactive,
                             self._continuity,self._memory,self._information,self._reading,
-                            self._group_observer,self._relay,self._bookshelf,self._creation,self._admin):
+                            self._group_observer,self._relay,self._bookshelf,self._admin):
                 if service:service.update_config(self.config)
             if self._store:await self._store.sync_users(self.config.users.profiles)
             enabled_ids={str(profile.user_id) for profile in self.config.users.profiles if profile.enabled}
@@ -418,8 +398,7 @@ class MaiLifePlugin(MaiBotPlugin):
         if self._tasks:return
         self._tasks=[asyncio.create_task(self._maintenance_loop(),name="mai-life-maintenance"),
                      asyncio.create_task(self._proactive_loop(),name="mai-life-proactive"),
-                     asyncio.create_task(self._information_loop(),name="mai-life-information"),
-                     asyncio.create_task(self._creation_loop(),name="mai-life-creation")]
+                     asyncio.create_task(self._information_loop(),name="mai-life-information")]
 
     async def _stop_tasks(self)->None:
         """取消并等待后台和临时任务，确保卸载时没有悬挂协程继续访问 Store。"""
@@ -490,18 +469,6 @@ class MaiLifePlugin(MaiBotPlugin):
             self._activity_status={str(current.get("id") or ""):activity}
             await self._store.save_state({"current_activity":activity,"current_location":"在线","last_updated_at":now.timestamp()})
 
-    async def _creation_loop(self)->None:
-        while True:
-            try:
-                interval=int(self.config.creation.patrol_interval_minutes)*60 if self.config.creation.enabled else 300
-                await asyncio.sleep(max(60,interval))
-                if not self.config.creation.enabled:continue
-                assert self._creation and self._env and self._store and self._schedule
-                now=self._env.now(); schedule=await self._schedule.context(now)
-                await self._creation.tick(now,self._personality,schedule)
-            except asyncio.CancelledError:raise
-            except Exception as exc:self.ctx.logger.error(f"[MaiLife] 书柜创作巡检异常: {exc}")
-
     async def _maintenance_tick(self,force_weather:bool=False,*,allow_weather_network:bool=True)->None:
         """维护任务窗口与实际执行状态，不编写或提前生成活动经历。"""
         if not self._ready:return
@@ -563,7 +530,7 @@ class MaiLifePlugin(MaiBotPlugin):
     def _apply_bot_name(self)->None:
         """把角色名分发给所有会写提示词的服务，避免各处硬编码旧名。"""
         for target in (self._schedule,self._memory,
-                       self._information,self._reading,self._relay,self._creation):
+                       self._information,self._reading,self._relay):
             setter=getattr(target,"set_bot_name",None)
             if setter:setter(self._bot_name)
 
@@ -1528,18 +1495,6 @@ class MaiLifePlugin(MaiBotPlugin):
         saved=await self._store.confirm_date_candidate(candidate_id,uid,parsed.isoformat(),self._env.now().timestamp()) if self._store and self._env else 0
         return await self._send_command(kwargs,f"已确认日期 #{saved}：{parsed.isoformat()}。" if saved else "没有找到属于你的待确认项。")
 
-    @Command(name="/麦麦立即创作",pattern=r"^(?:/麦麦立即创作|/mai_create_now)(?=\s|$)",description="管理员立即执行一次创作判断")
-    async def cmd_create_now(self,**kwargs:Any)->tuple[bool,str,int]:
-        uid=str(kwargs.get("user_id") or "")
-        if not await self._command_access(kwargs) or not await self._is_owner_or_admin(uid):
-            return await self._send_command(kwargs,"只有私聊管理员可以手动执行创作判断。"+ADMIN_IDS_HINT)
-        if not self._creation or not self._env or not self._store or not self._schedule:
-            return await self._send_command(kwargs,"创作服务尚未初始化。")
-        now=self._env.now(); result=await self._creation.tick(
-            now,self._personality,await self._schedule.context(now),force=True,
-        )
-        return await self._send_command(kwargs,_creation_result_text(result))
-
     @Command(name="/麦麦转述",pattern=r"^(?:/麦麦转述|/mai_relay)\s+(?P<group_id>\d+)\s+(?P<relay_content>.+)$",description="主人或管理员按 QQ 群号发起转述")
     async def cmd_relay(self,**kwargs:Any)->tuple[bool,str,int]:
         uid=str(kwargs.get("user_id") or "")
@@ -1563,9 +1518,8 @@ class MaiLifePlugin(MaiBotPlugin):
               f"工作时间 {self.config.group.work_start}-{self.config.group.work_end}\n"
               f"工作时间按 {self.config.environment.timezone}；起止相同表示全天。\n"
               f"生活记忆：{'开启' if self.config.memory.enabled else '关闭'}\n"
-              f"联网见闻：{'开启' if self.config.network.enabled else '关闭'}（新闻 {'开' if self.config.network.news_enabled else '关'} / 搜索 {'开' if self.config.network.news_enabled else '关'}）\n"
+              f"联网见闻：{'开启' if self.config.network.enabled else '关闭'}（新闻 {'开' if self.config.network.news_enabled else '关'} / 搜索 {'开' if self.config.network.search_enabled else '关'}）\n"
               f"社交转述：{'开启' if self.config.group.relay_enabled else '关闭'}（白名单群 {len(self.config.group.profiles)}）\n"
-              f"书柜创作：{'开启' if self.config.creation.enabled else '关闭'}（明文确认 {'是' if self.config.creation.plaintext_storage_acknowledged else '否'}）\n"
               f"模型任务：{self.config.models.fast_task}/{self.config.models.reasoning_task}")
         return await self._send_command(kwargs,text)
 
@@ -1604,7 +1558,7 @@ class MaiLifePlugin(MaiBotPlugin):
     async def _status_report(self)->str:
         """聚合生活、消息、模型、联网与后台任务健康状态供诊断命令展示。"""
         if not self._ready:return "麦日常尚未初始化。"
-        assert self._store and self._env and self._schedule and self._llm and self._information and self._creation
+        assert self._store and self._env and self._schedule and self._llm and self._information
         state=await self._store.get_state(); weather=await self._store.get_weather() or {"description":"天气未知"}
         context=await self._schedule.context(self._env.now())
         tasks=",".join(sorted(self._llm.available_tasks)) or "未知"
@@ -1614,13 +1568,11 @@ class MaiLifePlugin(MaiBotPlugin):
                            await self._store.recent_search_history(self._env.now().timestamp(),20)
                            if item.get("success")==0 and str(item.get("error_class") or "")),"无")
         observations=await self._store.recent_group_observations(self._env.now().timestamp(),100)
-        creation=await self._creation.status(self._env.now())
         segment=str((context.get("current") or {}).get("summary") or "无")
         activity=str(state.get("current_activity") or "自由活动")
         diary_text=f"最近一篇 {diaries[0]['day']}" if diaries else "暂无"
         narrative_note=("；部分叙事模型不可用，日记使用实际记录摘要"
-                        if any(not self._llm.task_available(name)
-                               for name in ("diary","creation_body")) else "")
+                        if not self._llm.task_available("diary") else "")
         return (f"麦日常 v{PLUGIN_VERSION}\n"
                 f"场景：{activity}\n"
                 + (f"日程：{segment}\n" if segment!=activity else "")
@@ -1632,8 +1584,6 @@ class MaiLifePlugin(MaiBotPlugin):
                 f"搜索历史 {info['recent_search_history']}，最近失败：{last_failure}\n"
                 f"社交转述：{'开启' if self.config.group.relay_enabled else '关闭'}，短期群摘要 {len(observations)}，"
                 f"群缓冲 {self._group_observer.active_groups if self._group_observer else 0}\n"
-                f"书柜创作：{'开启' if creation['enabled'] else '关闭'}，今日归档 {creation['archived_today']}，"
-                f"待处理灵感 {creation['pending_inspirations']}，明文确认 {'是' if creation['plaintext_acknowledged'] else '否'}\n"
                 f"模型健康：{self._llm.health_error or '正常'}\n后台任务：{len(self._tasks)}")
 
     @API(name="get_life_state",description="获取麦麦全局生活状态",version="1",public=True)
@@ -1801,21 +1751,20 @@ class MaiLifePlugin(MaiBotPlugin):
     async def webui_status_overview(self,**kwargs:Any)->dict[str,Any]:
         try:
             if not self._ready:return {"success":False,"error":"not_ready"}
-            assert self._store and self._env and self._schedule and self._llm and self._information and self._creation
+            assert self._store and self._env and self._schedule and self._llm and self._information
             now=self._env.now(); now_ts=now.timestamp()
             state=await self._store.get_state(); weather=await self._store.get_weather() or {}
             diaries=await self._store.list_diaries(1)
             observations=await self._store.recent_group_observations(now_ts,100)
             context=await self._schedule.context(now); snap=self._env.snapshot(now)
             current=context.get("current") or {}; nxt=context.get("next") or {}; scene=context.get("scene") or {}
-            info=await self._information.status(now); creation=await self._creation.status(now)
+            info=await self._information.status(now)
             # 后台联网失败不能完全静默：带出最近一次失败分类，便于区分"没新闻"与"搜索挂了"。
             last_failure=next((str(item.get("error_class") or "") for item in
                                await self._store.recent_search_history(now.timestamp(),20)
                                if item.get("success")==0 and str(item.get("error_class") or "")),"无")
             narrative_note=("部分叙事模型不可用，日记使用实际记录摘要"
-                            if any(not self._llm.task_available(name)
-                                   for name in ("diary","creation_body")) else "")
+                            if not self._llm.task_available("diary") else "")
             profiles=self.config.users.profiles
             return {
                 "generated_at":now.isoformat(timespec="seconds"),"bot_name":self._bot_name,"version":PLUGIN_VERSION,
@@ -1843,9 +1792,7 @@ class MaiLifePlugin(MaiBotPlugin):
                             "exploration_count":int(info.get("recent_explorations") or 0),
                             "search_history_count":int(info.get("recent_search_history") or 0),
                             "last_failure":last_failure,
-                            "group_observations":len(observations),
-                            "archived_today":int(creation.get("archived_today") or 0),
-                            "pending_inspirations":int(creation.get("pending_inspirations") or 0)},
+                            "group_observations":len(observations)},
             }
         except Exception as exc:
             return {"success":False,"error":f"{type(exc).__name__}: {exc}"[:200]}
@@ -1889,11 +1836,12 @@ class MaiLifePlugin(MaiBotPlugin):
                        "results_digest":_search_results_digest(item.get("results") or []),
                        "duration_ms":round(float(item.get("duration_ms") or 0),1)}
                       for item in await self._store.recent_search_history(now_ts,limit=20)]
-            # status 只回开关与计数。
+            # 同时返回订阅源名称与链接，方便识别新闻来源。
             return {"status":{"information_enabled":_switch(info.get("enabled")),
                               "news_enabled":_switch(info.get("news_enabled")),
                               "search_enabled":_switch(info.get("search_enabled")),
                               "sources":int(info.get("sources") or 0),
+                              "news_sources":info.get("news_sources") or [],
                               "recent_news":int(info.get("recent_news") or 0),
                               "recent_explorations":int(info.get("recent_explorations") or 0),
                               "recent_search_history":int(info.get("recent_search_history") or 0)},
@@ -1903,19 +1851,14 @@ class MaiLifePlugin(MaiBotPlugin):
         except Exception as exc:
             return {"success":False,"error":f"{type(exc).__name__}: {exc}"[:200]}
 
-    @API(name="webui_bookshelf_overview",description="WebUI 书柜：文档列表、创作状态、创作运行与最新作品摘录",version="1",public=False)
+    @API(name="webui_bookshelf_overview",description="WebUI 阅读笔记：私人批注列表与正文",version="1",public=False)
     async def webui_bookshelf_overview(self,**kwargs:Any)->dict[str,Any]:
         try:
-            if not (self._store and self._env and self._creation):return {"success":False,"error":"not_ready"}
-            assert self._store and self._env and self._creation
+            if not (self._store and self._env):return {"success":False,"error":"not_ready"}
+            assert self._store and self._env
             now=self._env.now(); now_ts=now.timestamp()
-            counts=await self._store.management_overview_counts()
-            rows=await self._store.list_bookshelf_documents(allow_private=True,limit=20)
-            # 运行明细取 50：与宿主 table 每页 50 行一致，counts.creation_runs 因此等于可见条数。
-            runs=await self._store.management_creation_runs(limit=50)
-            creation=await self._creation.status(now)
-            # 主人专属网页：私人日记与阅读批注同样可见；正文全量输出（revisions 已 JOIN 出 content）。
-            latest=next((row for row in rows if str(row.get("content") or "").strip()),None)
+            rows=await self._store.list_bookshelf_documents(allow_private=True,limit=20,doc_type="reading_note")
+            # 日记有独立阅读器，此处仅展示私人阅读批注。
             books=[{"doc_type":str(row.get("doc_type") or ""),"title":str(row.get("title") or "")[:160],
                     "privacy":str(row.get("privacy") or ""),"status":str(row.get("status") or ""),
                     "updated_age":_relative_age(float(row.get("updated_at") or 0),now_ts),
@@ -1924,22 +1867,10 @@ class MaiLifePlugin(MaiBotPlugin):
             books_full_text=_FULL_TEXT_SEP.join(
                 f"【{row['title']}】（{row['doc_type'] or '—'}｜{row['privacy'] or '—'}｜{row['status'] or '—'}｜"
                 f"更新于 {row['updated_age']}）\n\n{row['content'] or '（无正文）'}"
-                for row in books) or "（书柜暂无作品）"
-            return {"counts":{"documents":int(counts.get("bookshelf_documents") or 0),
-                              "private_documents":int(counts.get("private_documents") or 0),
-                              "creation_runs":len(runs)},
-                    "creation":{"enabled":bool(creation.get("enabled")),
-                                "plaintext_acknowledged":bool(creation.get("plaintext_acknowledged")),
-                                "archived_today":int(creation.get("archived_today") or 0),
-                                "pending_inspirations":int(creation.get("pending_inspirations") or 0),
-                                "daily_max":int(self.config.creation.daily_max)},
+                for row in books) or "（暂无阅读笔记）"
+            return {"counts":{"documents":len(books)},
                     "books":books,
-                    "books_full_text":books_full_text,
-                    "runs":[{"document_id":str(row.get("document_id") or ""),"title":str(row.get("title") or "")[:160],
-                             "status":str(row.get("status") or ""),"started_at":float(row.get("started_at") or 0)}
-                            for row in runs],
-                    "latest_work":{"title":str(latest.get("title") or ""),"privacy":str(latest.get("privacy") or ""),
-                                   "content":str(latest.get("content") or "")} if latest else {"title":"","privacy":"","content":""}}
+                    "books_full_text":books_full_text}
         except Exception as exc:
             return {"success":False,"error":f"{type(exc).__name__}: {exc}"[:200]}
 
@@ -2178,24 +2109,10 @@ class MaiLifePlugin(MaiBotPlugin):
                                "proactive_share_enabled":_switch(cfg.network.proactive_share_enabled),
                                "context_item_limit":int(cfg.network.context_item_limit),
                                "news_enabled":_switch(cfg.network.news_enabled),
+                               "news_sources":list(cfg.network.news_sources),
                                "news_daily_max":int(cfg.network.news_daily_max),
                                "search_enabled":_switch(cfg.network.search_enabled),
                                "search_daily_max":int(cfg.network.search_daily_max)},
-                    "creation":{"enabled":_switch(cfg.creation.enabled),
-                                "plaintext_storage_acknowledged":_switch(cfg.creation.plaintext_storage_acknowledged),
-                                "daily_max":int(cfg.creation.daily_max),
-                                "public_works_enabled":_switch(cfg.creation.public_works_enabled),
-                                "inspiration_lookback_days":int(cfg.creation.inspiration_lookback_days),
-                                "external_reading_enabled":_switch(cfg.creation.external_reading_enabled),
-                                "patrol_interval_minutes":int(cfg.creation.patrol_interval_minutes),
-                                "continuation_enabled":_switch(cfg.creation.continuation_enabled),
-                                "continuation_probability":round(float(cfg.creation.continuation_probability),2),
-                                "continuation_min_gap_days":int(cfg.creation.continuation_min_gap_days),
-                                "continuation_max_chapters":int(cfg.creation.continuation_max_chapters),
-                                "continuation_stale_days":int(cfg.creation.continuation_stale_days),
-                                "continuation_work_types":"、".join(str(item) for item in cfg.creation.continuation_work_types),
-                                "continuation_context_chapters":int(cfg.creation.continuation_context_chapters),
-                                "continuation_chapter_tail_chars":int(cfg.creation.continuation_chapter_tail_chars)},
                     "reading":{"enabled":_switch(cfg.reading.enabled),
                                "directory":str(cfg.reading.directory),
                                "chunk_chars":int(cfg.reading.chunk_chars),
@@ -2306,7 +2223,6 @@ class MaiLifePlugin(MaiBotPlugin):
                                 "token_total_today":int(overview.get("token_total_today") or 0),
                                 "search_calls_today":int(overview.get("search_calls_today") or 0),
                                 "social_enabled":_onoff(overview.get("social_enabled")),
-                                "creation_enabled":_onoff(overview.get("creation_enabled")),
                                 "network_enabled":_onoff(overview.get("network_enabled"))},
                     "groups":[{"group_id":str(item.get("group_id") or ""),
                                "group_name":str(item.get("group_name") or ""),

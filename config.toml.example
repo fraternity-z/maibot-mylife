@@ -26,7 +26,7 @@
 
 [plugin]
 # 配置结构版本，请勿手动修改。
-config_version = "1.16.0"
+config_version = "1.17.0"
 
 # 插件总开关。关闭后保留数据库，但停止任务执行、状态维护和主动消息。
 enabled = true
@@ -183,9 +183,7 @@ replyer_detail = "full"
 
 
 [models]
-creation_outline_task = ""
-creation_body_task = ""
-creation_review_task = ""
+diary_task = ""
 reading_annotation_task = ""
 # 模型输出 token 上限；0=不限制，由服务商决定（推荐）。
 # 推理模型的思考链占用输出预算，写死小上限（如 300/900）会把正文挤成空响应。
@@ -199,7 +197,7 @@ retention_days = 30
 
 
 [reading]
-# 在固定阅读时段读取真实小说；不依赖 creation.enabled。
+# 在固定阅读时段读取真实小说。
 # 将 UTF-8 .txt 文件放入插件目录下 novels 文件夹，按文件名排序逐段阅读。
 # 原文片段和批注存入私人书柜，朋友无权读取；学习结果供上下文使用，不训练模型权重。
 enabled = true
@@ -232,8 +230,8 @@ score_threshold = 0.45
 
 [network]
 # ===== 联网（总开关 → 搜索工具 → 搜索历史 → 见闻关联 → 新闻 → 主动搜索）=====
-# 全部走主程序统一联网服务（ctx.web.search / ctx.web.fetch）：
-# 请在主程序「模型设置→功能分配→联网搜索」配置并启用；插件不再维护自有搜索服务列表。
+# 内置新闻源直接读取公开 RSS；搜索和文章正文使用宿主 ctx.web.search / ctx.web.fetch。
+# 搜索服务在主程序「模型设置→功能分配→联网搜索」配置并启用；内置源摘要无需搜索 API Key。
 enabled = false
 tool_enabled = true
 max_results = 5
@@ -250,8 +248,11 @@ association_threshold = 0.65
 proactive_share_enabled = true
 context_item_limit = 3
 
-# 新闻阅读：按兴趣低频读取（走宿主联网）。
+# 新闻阅读：开启 enabled 和 news_enabled 后，优先读取以下公开订阅。
+# 可选 ithome（IT之家）、solidot（Solidot）、sspai（少数派）；[] 表示只用宿主搜索。
+# 所有订阅源失败或无近期条目时回退宿主搜索；失败和空结果也计入每日次数。
 news_enabled = false
+news_sources = ["ithome", "solidot", "sspai"]
 news_daily_max = 1
 news_full_text_count = 3
 news_max_concurrency = 2

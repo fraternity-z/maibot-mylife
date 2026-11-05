@@ -1,19 +1,54 @@
-"""通过宿主统一联网服务读取低频新闻，并按需用 web.fetch 抓取正文。"""
+"""优先读取内置新闻订阅，失败时使用宿主搜索，并按需抓取正文。"""
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import json
-from datetime import timedelta
+import math
+import re
+import time
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from itertools import zip_longest
 from typing import Any
+from urllib.parse import urljoin
+from xml.etree import ElementTree
 
 from .host_search import HostSearchService
+from .http_client import HttpClient, HttpRequestError
+
+
+NEWS_SOURCES={
+    "ithome":("IT之家","https://www.ithome.com/rss/"),
+    "solidot":("Solidot","https://www.solidot.org/index.rss"),
+    "sspai":("少数派","https://sspai.com/feed"),
+}
+
+
+def _published_timestamp(value:Any)->float|None:
+    if not value:return None
+    try:
+        stamp=float(value)
+    except (TypeError,ValueError):
+        try:
+            try:parsed=datetime.fromisoformat(str(value).strip().replace("Z","+00:00"))
+            except ValueError:parsed=parsedate_to_datetime(str(value))
+            stamp=parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).timestamp()
+        except (ValueError,TypeError,OverflowError,OSError):return None
+    return stamp if math.isfinite(stamp) else None
+
+
+def _plain_text(value:str)->str:
+    value=re.sub(r"<(script|style)\b[^>]*>.*?</\1\s*>"," ",value,flags=re.I|re.S)
+    return " ".join(html.unescape(re.sub(r"<[^>]+>"," ",value)).split())
 
 
 class NewsService:
     def __init__(self,store:Any,config:Any,search:HostSearchService,logger:Any,llm:Any,bot_name:str="麦麦")->None:
         self.store=store; self.config=config; self.search=search; self.logger=logger
         self.llm=llm; self.bot_name=bot_name
+        self.http=HttpClient(logger); self._lock=asyncio.Lock()
 
     def update_config(self,config:Any)->None:self.config=config
 
@@ -21,26 +56,42 @@ class NewsService:
         clean=str(name or "").strip()
         if clean:self.bot_name=clean
 
+    def sources(self)->list[dict[str,str]]:
+        return [{"id":key,"name":NEWS_SOURCES[key][0],"url":NEWS_SOURCES[key][1]}
+                for key in dict.fromkeys(getattr(self.config.network,"news_sources",[])) if key in NEWS_SOURCES]
+
     @staticmethod
     def _day_bounds(now:Any)->tuple[float,float]:
         start=now.replace(hour=0,minute=0,second=0,microsecond=0)
         return start.timestamp(),(start+timedelta(days=1)).timestamp()
 
     async def refresh_due(self,now:Any,schedule:dict[str,Any],personality:str)->int:
-        """在允许的空闲日程由人格规划新闻词，经宿主统一联网执行一次搜索并保存去重结果。"""
+        """后台和手动刷新共用额度，避免并发重复读取。"""
+        async with self._lock:
+            return await self._refresh_due(now,schedule,personality)
+
+    async def _refresh_due(self,now:Any,schedule:dict[str,Any],personality:str)->int:
         cfg=self.config.network
         if not cfg.enabled or not cfg.news_enabled or int(cfg.news_daily_max)<=0:return 0
         current=schedule.get("current") or {}
         if str(current.get("kind") or "") not in set(cfg.news_allowed_schedule_types):return 0
         start,end=self._day_bounds(now)
         if await self.store.search_attempt_count("news",start,end)>=int(cfg.news_daily_max):return 0
-        if not self.search.available():return 0
-        query=await self.search.sanitize_query(await self._plan_query(now,personality,schedule))
-        if not query:
-            return 0
-        response=await self.search.search(
-            query,operation="news",max_results=int(self.config.network.max_results),
-        )
+        sources=self.sources(); started=time.perf_counter()
+        results=await self._feed_results(sources,now.timestamp()) if sources else []
+        query=""
+        if not results and self.search.available():
+            query=await self.search.sanitize_query(await self._plan_query(now,personality,schedule))
+        if query:
+            response=await self.search.search(query,operation="news",max_results=int(cfg.max_results))
+        elif sources:
+            await self.search.record(
+                "news","内置新闻源："+"、".join(source["name"] for source in sources),"rss",
+                bool(results),"" if results else "feed_unavailable",(time.perf_counter()-started)*1000,
+                len(results),results,now.timestamp(),
+            )
+            response={"results":results,"service":"rss"}
+        else:return 0
         results=self._recent_results(response["results"],now.timestamp())
         if not results:
             if response["results"]:
@@ -59,28 +110,65 @@ class NewsService:
             item_id=hashlib.sha256(stable.encode()).hexdigest()
             content=contents.get(index,"")[:int(cfg.news_max_article_chars)]
             digest=hashlib.sha256(json.dumps([result["title"],summary,content],ensure_ascii=False).encode()).hexdigest()
-            source_id=f"host:{service}"+(":uncited" if uncited else "")
+            source_id=result.get("source_id") or f"host:{service}"+(":uncited" if uncited else "")
             if await self.store.upsert_news_item({
                 "id":item_id,"source_id":source_id,"title":result["title"],"url":result["url"],
-                "summary":summary,"content":content,"published_at":now_ts,"fetched_at":now_ts,
+                "summary":summary,"content":content,
+                "published_at":_published_timestamp(result.get("published_at")) or now_ts,"fetched_at":now_ts,
                 "content_hash":digest,"expires_at":now_ts+retention,
             }):changed+=1
         return changed
 
     @staticmethod
     def _recent_results(rows:list[dict[str,Any]],now_ts:float)->list[dict[str,Any]]:
-        """新闻只要近 3 天的：宿主返回的 published_at 可解析且早于阈值时丢弃，解析不了则保留。"""
+        """新闻只要近 3 天的；兼容 RSS、Atom 和宿主时间格式，无日期时保留。"""
         cutoff=now_ts-3*86400
-        kept=[]
-        for row in rows:
-            published=row.get("published_at")
-            if published:
-                try:
-                    if float(published)<cutoff:continue
-                except (TypeError,ValueError):
-                    pass  # ISO 字符串等非数值格式无法本地判新旧，保守保留
-            kept.append(row)
-        return kept
+        return [row for row in rows if (stamp:=_published_timestamp(row.get("published_at"))) is None or stamp>=cutoff]
+
+    async def _feed_results(self,sources:list[dict[str,str]],now_ts:float)->list[dict[str,Any]]:
+        semaphore=asyncio.Semaphore(int(self.config.network.news_max_concurrency))
+        async def read(source:dict[str,str])->list[dict[str,Any]]:
+            try:
+                async with semaphore:
+                    response=await self.http.get(source["url"],timeout=8,max_bytes=1_000_000,public_only=True)
+                return self._recent_results(self._parse_feed(response.body,response.url,source["id"]),now_ts)
+            except Exception:
+                self.logger.warning(f"[MaiLife] 新闻源 {source['name']} 读取失败，已跳过")
+                return []
+        batches=await asyncio.gather(*(read(source) for source in sources))
+        results=[]; seen=set(); limit=min(5,int(self.config.network.max_results))
+        # 各源交替取条目，避免第一家覆盖所有阅读名额。
+        for group in zip_longest(*batches):
+            for row in group:
+                if row is None or row["url"] in seen:continue
+                seen.add(row["url"]); results.append(row)
+                if len(results)>=limit:return results
+        return results
+
+    @staticmethod
+    def _parse_feed(body:bytes,base_url:str,source_id:str)->list[dict[str,Any]]:
+        if re.search(br"<!\s*(?:DOCTYPE|ENTITY)\b",body.replace(b"\x00",b""),re.I):
+            raise ValueError("新闻订阅不允许 DTD 或实体声明")
+        root=ElementTree.fromstring(body)
+        entries=root.findall("./channel/item") if root.tag=="rss" else root.findall("{*}entry")
+        rows=[]
+        for entry in entries[:20]:
+            def field(*names:str)->str:
+                for name in names:
+                    node=entry.find("{*}"+name)
+                    if node is not None:return "".join(node.itertext()).strip()
+                return ""
+            link=next((node.get("href") or "" for node in entry.findall("{*}link")
+                       if node.get("rel","alternate")=="alternate" and node.get("href")),"") or field("link")
+            title=_plain_text(field("title"))[:240]
+            if not title or not link:continue
+            try:
+                url=HttpClient.validate_url(urljoin(base_url,link))
+                if HttpClient.private_host_reason(url):continue
+            except (HttpRequestError,ValueError):continue
+            rows.append({"title":title,"url":url,"snippet":_plain_text(field("description","summary","content"))[:1200],
+                         "published_at":field("pubDate","published","updated","date"),"source_id":f"rss:{source_id}"})
+        return rows
 
     async def _plan_query(self,now,personality:str,schedule:dict)->str:
         """模型可选；规划失败仍用当天的明确新闻查询，结果必须由宿主实际检索。"""

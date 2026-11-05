@@ -113,14 +113,8 @@ class DailyLifeTests(unittest.IsolatedAsyncioTestCase):
         for kind in ("dream","scene"):
             await self.store.add_opportunity({"id":kind,"framework_id":f"{kind}:1","topic":kind,
                 "motive":"分享","weight":0.8,"expires_at":NOW.timestamp()+3600})
-        for kind in ("dream","life","scene","activity"):
-            await self.store.add_creation_inspiration({"id":kind,"source_kind":kind,"source_ref":"1",
-                "prompt_digest":kind,"score":0.9 if kind=="dream" else 0.5,
-                "created_at":NOW.timestamp(),"expires_at":NOW.timestamp()+3600})
         self.assertEqual([row["id"] for row in await self.store.active_opportunities(NOW.timestamp())],["scene"])
-        self.assertEqual([row["id"] for row in await self.store.pending_creation_inspirations(NOW.timestamp(),limit=1)],["activity"])
         self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM proactive_opportunities").fetchone()[0],2)
-        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM creation_inspirations").fetchone()[0],4)
 
     async def test_scene_and_opportunities_roll_back_together(self):
         await self.store.save_scene("node","原场景",[])

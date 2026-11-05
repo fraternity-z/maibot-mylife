@@ -73,14 +73,14 @@ class HostSearchService:
                            "published_at":hit.get("published_at") or ""}
                           for hit in hits if isinstance(hit,dict)]
                     service=str(result.get("service") or "host") if isinstance(result,dict) else "host"
-                    await self._record(operation,query,service,True,"",
+                    await self.record(operation,query,service,True,"",
                                        (time.perf_counter()-started)*1000,len(rows),rows,now)
                     return {"results":rows,"service":service,"error_class":""}
                 except Exception as exc:
                     last_error=_error_class(exc)
                     if attempt<attempts-1:
                         await asyncio.sleep(min(0.5+attempt,2.0))  # 短退避后重试
-        await self._record(operation,query,"host",False,last_error,
+        await self.record(operation,query,"host",False,last_error,
                            (time.perf_counter()-started)*1000,0,[],now)
         return {"results":[],"service":"","error_class":last_error}
 
@@ -91,22 +91,22 @@ class HostSearchService:
         try:
             result=await web.fetch(str(url).strip())
             return str(result.get("content") or "") if isinstance(result,dict) else ""
-        except Exception as exc:
-            self.logger.debug(f"[MaiLife] 网页正文读取失败 url={url[:120]}: {exc}")
+        except Exception:
+            self.logger.debug("[MaiLife] 网页正文读取失败，使用已有摘要")
             return ""
 
-    async def _record(self,operation:str,query:str,service:str,success:bool,error_class:str,
+    async def record(self,operation:str,query:str,service:str,success:bool,error_class:str,
                       latency_ms:float,result_count:int,rows:list[dict[str,Any]],event_time:float)->None:
         """usage 计数（search_api_events）+ 可选本地搜索历史；记录失败不影响搜索。"""
         try:
             await self.store.record_search_api_event(
-                created_at=event_time,operation=operation[:40],provider_id="host",
+                created_at=event_time,operation=operation[:40],provider_id="rss" if service=="rss" else "host",
                 provider_type=service[:40] or "host",key_fingerprint="",success=success,
                 status_code=0,latency_ms=latency_ms,result_count=int(result_count),
                 error_class=error_class[:40],
             )
-        except Exception as exc:
-            self.logger.debug(f"[MaiLife] 搜索 usage 记录失败: {exc}")
+        except Exception:
+            self.logger.debug("[MaiLife] 搜索 usage 记录失败")
         if not getattr(self.config.network,"history_enabled",True):return
         try:
             retention=max(1,min(365,int(getattr(self.config.network,"history_retention_days",30) or 30)))

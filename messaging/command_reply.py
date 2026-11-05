@@ -1,7 +1,6 @@
-"""命令回复的实时 stream 解析、图片发送与文本降级。"""
+"""命令回复的实时 stream 解析与文本发送。"""
 from __future__ import annotations
 
-import base64
 from collections.abc import Iterable
 from typing import Any
 
@@ -94,25 +93,9 @@ class CommandReplyService:
             if opened:return opened
         return str(stream_id or "").strip()
 
-    async def send_image_bytes_with_fallback(self,image_bytes:bytes,stream_id:str,user_id:str="",group_id:str="",
-                                             platform:str="qq")->bool:
-        """Base64 编码本地 PNG，优先发送到实时解析的会话，失败后尝试原始会话。"""
-        if not image_bytes:return False
-        resolved=await self.resolve_live_stream_id(stream_id,user_id,group_id,platform)
-        if not resolved:return False
-        encoded=base64.b64encode(image_bytes).decode("ascii")
-        try:
-            if await self.ctx.send.image(encoded,resolved):return True
-        except Exception as exc:
-            self._debug(f"[MaiLife] 指令图片发送失败 type={type(exc).__name__}")
-        fallback=str(stream_id or "").strip()
-        if not fallback or fallback==resolved:return False
-        try:return bool(await self.ctx.send.image(encoded,fallback))
-        except Exception:return False
-
     async def send_text_with_fallback(self,text:str,stream_id:str,user_id:str="",group_id:str="",
                                       platform:str="qq")->bool:
-        """按与图片相同的实时会话策略发送纯文本降级内容。"""
+        """优先发送到实时解析的会话，失败后尝试原始会话。"""
         resolved=await self.resolve_live_stream_id(stream_id,user_id,group_id,platform)
         if not resolved:return False
         try:

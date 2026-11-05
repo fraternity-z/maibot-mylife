@@ -80,9 +80,6 @@ class LLMService:
             "search": models.search_task or models.reasoning_task,
             "relevance": models.relevance_task or models.reasoning_task,
             "group_judgment": models.group_judgment_task or models.fast_task,
-            "creation_outline": models.creation_outline_task or models.reasoning_task,
-            "creation_body": models.creation_body_task or models.creative_task,
-            "creation_review": models.creation_review_task or models.reasoning_task,
             "reading_annotation": models.reading_annotation_task or models.creative_task,
         }
         return str(routes.get(kind) or models.reasoning_task or "planner").strip()
@@ -101,10 +98,6 @@ class LLMService:
             if self.config.network.association_enabled:kinds.add("relevance")
         # relay_summary 已并入群观察的单次 group_judgment 调用（v1.23.6），不再单列必查。
         if self.config.group.relay_enabled:kinds.add("group_judgment")
-        if self.config.creation.enabled:
-            kinds.update({"creation_outline","creation_body","creation_review"})
-            if self.config.creation.external_reading_enabled and self.config.creation.reading_annotation_enabled:
-                kinds.add("reading_annotation")
         return kinds
 
     async def refresh_health(self) -> set[str]:

@@ -1,4 +1,4 @@
-"""日常活动继续参与背景和创作，旧体征字段不再参与行为。"""
+"""日常活动继续参与背景和日记，旧体征字段不再参与行为。"""
 import asyncio
 from datetime import datetime, timedelta, timezone
 import importlib
@@ -14,8 +14,7 @@ NOW=datetime(2026,11,5,12,tzinfo=timezone(timedelta(hours=8)))
 
 @pytest.fixture
 def modules(plugin_module):
-    names=("messaging.prompt_builder","life.proactive","creation.creation_service",
-           "creation.inspiration_service","life.memory_service","information.information_service")
+    names=("messaging.prompt_builder","life.proactive","life.memory_service","information.information_service")
     return SimpleNamespace(**{name.rsplit(".",1)[-1]:importlib.import_module(f"mai_integration_tests.{name}") for name in names})
 
 
@@ -30,20 +29,6 @@ def test_prompts_keep_daily_activities_and_ignore_legacy_vitals(modules,kind,act
         assert all(term not in prompt for term in ("精力","饥饿","精神活跃度","睡眠阶段","旧健康备注","刚被叫醒","梦境余韵"))
         assert "不是用户刚说的" in prompt
         assert "未回应摘要" not in prompt
-
-
-@pytest.mark.parametrize("kind,force,expected",[("leisure",False,"no_inspiration"),("work",False,"schedule_busy"),("work",True,"no_inspiration")])
-def test_creation_uses_schedule_without_a_vitals_store(modules,kind,force,expected):
-    config=SimpleNamespace(creation=SimpleNamespace(enabled=True,plaintext_storage_acknowledged=True,
-                                                    daily_max=2,allowed_schedule_types=["leisure"]))
-    store=SimpleNamespace(recover_creation_claims=AsyncMock(),archived_work_count=AsyncMock(return_value=0),
-                          pending_creation_inspirations=AsyncMock(return_value=[]))
-    service=modules.creation_service.CreationService(Mock(),store,config,Mock(),Mock())
-    service.inspirations.collect=AsyncMock()
-    result=asyncio.run(service.tick(NOW,"日常人格",{"current":{"kind":kind}},force=force))
-    assert result=={"status":expected}
-    if expected=="schedule_busy":service.inspirations.collect.assert_not_awaited()
-    else:service.inspirations.collect.assert_awaited_once_with(NOW)
 
 
 @pytest.mark.parametrize("host_success",[True,False])
@@ -72,23 +57,6 @@ def test_proactive_needs_no_vitals_and_preserves_failed_trigger_cleanup(modules,
     else:
         store.release_opportunity.assert_awaited_once_with("o")
         assert store.set_proactive_event_status.await_args.args[1]=="failed"
-
-
-def test_inspiration_collects_diary_and_scenes_without_dream_storage(modules):
-    config=SimpleNamespace(creation=SimpleNamespace(inspiration_lookback_days=3,external_reading_enabled=False,
-                                                    external_reading_api_name=""))
-    diary={"day":"2026-11-04","created_at":NOW.timestamp()-86400,"title":"新闻阅读",
-           "mood_summary":"平稳","content":"整理了新闻"}
-    store=SimpleNamespace(list_diaries=AsyncMock(return_value=[diary]),
-        get_framework=AsyncMock(side_effect=[[{"id":"task:news","kind":"leisure","summary":"待执行：检索新闻"}],[]]),
-        get_scenes_by_framework_ids=AsyncMock(return_value={"task:news":{"scene":"已检索新闻并保存摘要"}}),
-        add_creation_inspiration=AsyncMock(return_value=True))
-    service=modules.inspiration_service.InspirationService(Mock(),store,config,Mock(),Mock())
-    assert asyncio.run(service.collect(NOW))==2
-    items=[call.args[0] for call in store.add_creation_inspiration.await_args_list]
-    assert [(item["source_kind"],item["privacy_ceiling"]) for item in items]==[("diary","private"),("activity","public")]
-    assert "已检索新闻并保存摘要" in items[1]["prompt_digest"]
-    assert "待执行" not in items[1]["prompt_digest"]
 
 
 def test_diary_uses_executed_activities_and_anonymous_counts_without_dream_storage(modules):

@@ -23,7 +23,7 @@ def plugin(plugin_module):
     instance.ctx=SimpleNamespace(logger=Mock())
     instance._get_logger=lambda:instance.ctx.logger
     for name in ("_store","_llm","_schedule","_proactive","_continuity","_memory",
-                 "_information","_reading","_group_observer","_relay","_bookshelf","_creation","_admin"):
+                 "_information","_reading","_group_observer","_relay","_bookshelf","_admin"):
         setattr(instance,name,AsyncMock())
     instance._store.get_user.return_value=None
     instance._store.proactive_for_task.return_value={}
@@ -277,7 +277,7 @@ def test_config_reload_retains_group_reply_origin_and_applies_new_hours(plugin):
     plugin._start_tasks=Mock()
     plugin._resolve_all_streams=AsyncMock()
     for name in ("_llm","_schedule","_proactive","_continuity","_memory","_information","_reading",
-                 "_group_observer","_relay","_bookshelf","_creation","_admin"):
+                 "_group_observer","_relay","_bookshelf","_admin"):
         getattr(plugin,name).update_config=Mock()
     message=inbound(group=True)
     async def flow():
@@ -337,7 +337,6 @@ def test_daily_overview_memories_and_config_apis(plugin):
     plugin._store.recent_search_history.return_value=[]
     plugin._schedule.context.return_value={"current":{"kind":"leisure","summary":"看书"}}
     plugin._information.status.return_value={}
-    plugin._creation.status.return_value={}
     plugin._llm.available_tasks=set()
     plugin._llm.task_available=Mock(return_value=True)
     plugin._env.snapshot.return_value={}
@@ -350,7 +349,7 @@ def test_daily_overview_memories_and_config_apis(plugin):
     assert "读了一本书" in memories["diaries_full_text"]
     assert "dreams" not in memories and "latest_dream" not in memories
     assert "error" not in config
-    assert "minimum_energy" not in config["creation"]
+    assert "creation" not in config
     assert "minimum_energy" not in config["proactive"]
 
 

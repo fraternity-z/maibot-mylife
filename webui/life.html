@@ -315,7 +315,7 @@
     border-color: var(--series-1);
   }
 
-  /* Reader Split View (Memories & Bookshelf) */
+  /* Reader Split View (Diaries & Reading Notes) */
   .ml-reader-split {
     display: grid;
     grid-template-columns: 320px 1fr;
@@ -501,7 +501,7 @@
       <span class="ml-tab-count" id="tab-cnt-memories">—</span>
     </button>
     <button type="button" class="ml-tab-btn" data-tab="shelf">
-      <span>麦麦书柜与创作</span>
+      <span>小说阅读笔记</span>
       <span class="ml-tab-count" id="tab-cnt-shelf">—</span>
     </button>
     <button type="button" class="ml-tab-btn" data-tab="digest">
@@ -606,57 +606,39 @@
 
   </section>
 
-  <!-- ==================== TAB 4: 麦麦书柜与创作 ==================== -->
+  <!-- ==================== TAB 4: 小说阅读笔记 ==================== -->
   <section id="panel-shelf" class="ml-tab-panel ml-hidden">
     <div class="ml-kpi-row" id="shelf-kpi-row"></div>
 
     <div class="ml-card">
       <div class="ml-card-header">
-        <h2 class="ml-card-title">书柜藏书与创作手稿阅读器</h2>
+        <h2 class="ml-card-title">小说阅读片段与批注</h2>
         <div class="ml-seg-group">
-          <button type="button" class="ml-seg-btn active" id="btn-shelf-split">按册翻阅</button>
-          <button type="button" class="ml-seg-btn" id="btn-shelf-full">全量作品拼接</button>
+          <button type="button" class="ml-seg-btn active" id="btn-shelf-split">分篇阅读</button>
+          <button type="button" class="ml-seg-btn" id="btn-shelf-full">笔记全文拼接</button>
         </div>
       </div>
       <div class="ml-reader-split" id="shelf-split-view">
         <div class="ml-item-list" id="shelf-book-list"></div>
         <div class="ml-reader-pane" id="shelf-reader-pane">
-          <div class="ml-empty">点击左侧任意作品阅读正文</div>
+          <div class="ml-empty">点击左侧任意笔记查看阅读片段与批注</div>
         </div>
       </div>
       <div class="ml-reader-pane ml-hidden" id="shelf-full-view">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <strong>书柜全量作品全文</strong>
+          <strong>近期阅读笔记全文（最多 20 篇）</strong>
           <button type="button" class="ml-btn" id="btn-copy-shelf" style="padding:4px 10px;font-size:12px;">复制全文</button>
         </div>
         <div class="ml-reader-body" id="shelf-full-text"></div>
       </div>
     </div>
 
-    <div class="ml-card">
-      <div class="ml-card-header">
-        <h2 class="ml-card-title">创作任务运行流水 (Creation Runs)</h2>
-        <span class="ml-badge" id="shelf-runs-count">0 条记录</span>
-      </div>
-      <div class="ml-table-wrap">
-        <table class="ml-table">
-          <thead>
-            <tr>
-              <th>作品标题</th>
-              <th>文档 ID</th>
-              <th>状态</th>
-              <th>启动时间</th>
-            </tr>
-          </thead>
-          <tbody id="shelf-runs-tbody"></tbody>
-        </table>
-      </div>
-    </div>
   </section>
 
   <!-- ==================== TAB 5: 联网见闻与搜索审计 ==================== -->
   <section id="panel-digest" class="ml-tab-panel ml-hidden">
     <div class="ml-kpi-row" id="digest-kpi-row"></div>
+    <div class="ml-card" id="digest-sources"></div>
 
     <!-- 新闻与探索笔记双栏 -->
     <div class="ml-card">
@@ -966,47 +948,42 @@
 
   }
 
-  // ==================== 4. Render Bookshelf ====================
+  // ==================== 4. Render Reading Notes ====================
   function renderShelf() {
     const d = state.shelf;
     if (!d) return;
     const c = d.counts || {};
-    const cr = d.creation || {};
     document.getElementById('tab-cnt-shelf').textContent = `${c.documents ?? 0}`;
     document.getElementById('shelf-kpi-row').innerHTML = `
-      <div class="ml-kpi-tile"><div class="ml-kpi-label">书柜总文档</div><div class="ml-kpi-value">${c.documents ?? 0}</div></div>
-      <div class="ml-kpi-tile"><div class="ml-kpi-label">私密作品数</div><div class="ml-kpi-value">${c.private_documents ?? 0}</div></div>
-      <div class="ml-kpi-tile"><div class="ml-kpi-label">今日归档 / 上限</div><div class="ml-kpi-value">${cr.archived_today ?? 0} / ${cr.daily_max ?? 0}</div></div>
-      <div class="ml-kpi-tile"><div class="ml-kpi-label">待消化灵感池</div><div class="ml-kpi-value">${cr.pending_inspirations ?? 0}</div></div>
-      <div class="ml-kpi-tile"><div class="ml-kpi-label">创作开关状态</div><div class="ml-kpi-value">${cr.enabled ? '已开启' : '已关闭'}</div></div>
+      <div class="ml-kpi-tile"><div class="ml-kpi-label">阅读笔记篇数</div><div class="ml-kpi-value">${c.documents ?? 0}</div></div>
     `;
 
     const books = d.books || [];
     const listEl = document.getElementById('shelf-book-list');
     const readerEl = document.getElementById('shelf-reader-pane');
-    document.getElementById('shelf-full-text').textContent = d.books_full_text || '（书柜暂无作品）';
+    document.getElementById('shelf-full-text').textContent = d.books_full_text || '（暂无阅读笔记）';
 
     if (!books.length) {
-      listEl.innerHTML = '<div class="ml-empty">书柜暂无文档</div>';
-      readerEl.innerHTML = '<div class="ml-empty">暂无可阅读的作品正文</div>';
+      listEl.innerHTML = '<div class="ml-empty">暂无阅读笔记</div>';
+      readerEl.innerHTML = '<div class="ml-empty">阅读小说后会在这里保存片段和批注</div>';
     } else {
       if (state.selectedBookIdx >= books.length) state.selectedBookIdx = 0;
       listEl.innerHTML = books.map((b, idx) => `
         <button type="button" class="ml-item-row ${idx === state.selectedBookIdx ? 'active' : ''}" data-book-idx="${idx}">
           <div style="display:flex;justify-content:space-between;width:100%;font-size:11.5px;color:var(--ml-muted);">
-            <span>${esc(b.doc_type || '文档')} · ${esc(b.privacy || '—')}</span>
+            <span>${esc(b.doc_type || '阅读笔记')} · ${esc(b.privacy || '—')}</span>
             <span>${esc(b.updated_age || '')}</span>
           </div>
-          <div style="font-weight:650;font-size:13.5px;">${esc(b.title || '未命名作品')}</div>
+          <div style="font-weight:650;font-size:13.5px;">${esc(b.title || '未命名笔记')}</div>
         </button>
       `).join('');
 
       const cur = books[state.selectedBookIdx];
       readerEl.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;">
-          <h3 style="margin:0;font-size:18px;">${esc(cur.title || '未命名作品')}</h3>
+          <h3 style="margin:0;font-size:18px;">${esc(cur.title || '未命名笔记')}</h3>
           <div style="display:flex;gap:6px;">
-            <span class="ml-badge">${esc(cur.doc_type || 'work')}</span>
+            <span class="ml-badge">${esc(cur.doc_type || '阅读笔记')}</span>
             <span class="ml-badge">${esc(cur.privacy || '—')}</span>
             <span class="ml-badge">${esc(cur.status || '—')}</span>
           </div>
@@ -1023,16 +1000,6 @@
       });
     }
 
-    const runs = d.runs || [];
-    document.getElementById('shelf-runs-count').textContent = `${runs.length} 条记录`;
-    document.getElementById('shelf-runs-tbody').innerHTML = runs.length ? runs.map((r) => `
-      <tr>
-        <td><strong>${esc(r.title || '—')}</strong></td>
-        <td style="font-family:var(--ml-font-mono);">${esc(r.document_id)}</td>
-        <td><span class="ml-badge">${esc(r.status)}</span></td>
-        <td style="font-family:var(--ml-font-mono);">${fmtEpoch(r.started_at)}</td>
-      </tr>
-    `).join('') : '<tr><td colspan="4" class="ml-empty">暂无创作运行流水</td></tr>';
   }
 
   // ==================== 5. Render Information Digest ====================
@@ -1051,6 +1018,12 @@
 
     document.getElementById('digest-news-fulltext').textContent = d.news_full_text || '（暂无新闻）';
     document.getElementById('digest-exp-fulltext').textContent = d.explorations_full_text || '（暂无探索笔记）';
+    const sources = st.news_sources || [];
+    document.getElementById('digest-sources').innerHTML = sources.length
+      ? `<strong>已配置新闻源</strong>${sources.map((source) => `
+          <div style="margin-top:8px;overflow-wrap:anywhere;">${esc(source.name)} · <span class="ml-url-pill">${esc(source.url)}</span></div>
+        `).join('')}`
+      : '<span style="color:var(--ml-muted);">未选择内置新闻源，新闻使用宿主搜索。</span>';
 
     const news = d.news || [];
     const newsBox = document.getElementById('digest-news-box');
@@ -1126,7 +1099,7 @@
       { name: 'users', label: '用户关系', onSuccess: (r) => { state.users = r; renderUsers(); } },
       { name: 'dates', label: '重要日期', onSuccess: (r) => { state.dates = r; renderDates(); } },
       { name: 'memories', label: '日常手账', onSuccess: (r) => { state.memories = r; renderMemories(); } },
-      { name: 'shelf', label: '麦麦书柜', onSuccess: (r) => { state.shelf = r; renderShelf(); } },
+      { name: 'shelf', label: '阅读笔记', onSuccess: (r) => { state.shelf = r; renderShelf(); } },
       { name: 'digest', label: '联网见闻', onSuccess: (r) => { state.digest = r; renderDigest(); } },
     ], 2);
 

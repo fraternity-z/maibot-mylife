@@ -29,8 +29,7 @@ class AdminService:
         if normalized=="groups":return {"scope":normalized,"items":await self._groups(limit)}
         if normalized=="dates":return {"scope":normalized,"items":await self.store.management_date_candidates(limit)}
         if normalized=="bookshelf":
-            return {"scope":normalized,"items":await self.store.management_bookshelf(limit),
-                    "creation_runs":await self.store.management_creation_runs(limit)}
+            return {"scope":normalized,"items":await self.store.management_bookshelf(limit)}
         if normalized=="tokens":return {"scope":normalized,**await self._tokens(now)}
         if normalized=="proactive":
             return {"scope":normalized,"items":await self.store.management_proactive_candidates(limit),
@@ -77,7 +76,7 @@ class AdminService:
                 "token_calls_today":sum(int(item.get("calls") or 0) for item in tokens),
                 "token_total_today":sum(int(item.get("total_tokens") or 0) for item in tokens),
                 "search_calls_today":sum(int(item.get("calls") or 0) for item in usage["search_api_usage"]),
-                "social_enabled":bool(self.config.group.relay_enabled),"creation_enabled":bool(self.config.creation.enabled),
+                "social_enabled":bool(self.config.group.relay_enabled),
                 "network_enabled":bool(self.config.network.enabled)}
 
     async def format_text(self,scope:str,now:Any,limit:int=12)->str:
@@ -88,7 +87,7 @@ class AdminService:
                     f"用户 {data['users']}（主人 {data['owners']}）｜待确认日期 {data['pending_dates']}\n"
                     f"书柜 {data['bookshelf_documents']}（私人 {data['private_documents']}）｜待发送主动 {data['pending_proactive']}\n"
                     f"今日模型调用 {data['token_calls_today']}｜Token {data['token_total_today']}｜搜索 API 请求 {data['search_calls_today']}\n"
-                    f"联网 {'开' if data['network_enabled'] else '关'}｜社交 {'开' if data['social_enabled'] else '关'}｜创作 {'开' if data['creation_enabled'] else '关'}")
+                    f"联网 {'开' if data['network_enabled'] else '关'}｜社交 {'开' if data['social_enabled'] else '关'}")
         if scope=="users":
             lines=["用户角色与主动额度"]
             lines.extend(f"{item['user_id']} {item['display_name'] or '未读取昵称'}｜{item['role']}｜温度 {item['temperature']}｜主动 {item['proactive_count']}/{'无上限' if item['daily_proactive_unlimited'] else item['daily_proactive_max']}"

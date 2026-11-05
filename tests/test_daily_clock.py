@@ -20,7 +20,6 @@ def plugin(plugin_module,tmp_path):
     instance=plugin_module.MaiLifePlugin()
     instance.config=plugin_module.MaiLifeSettings()
     instance.config.network.enabled=False
-    instance.config.creation.enabled=False
     instance.config.reading.chunk_chars=500
     instance.ctx=SimpleNamespace(logger=Mock())
     instance._env=Mock(now=Mock(return_value=at()),refresh_time=AsyncMock(),refresh_weather=AsyncMock(return_value={}))
@@ -31,7 +30,7 @@ def plugin(plugin_module,tmp_path):
     instance._reading=plugin_module.ReadingService(instance._store,instance.config,instance._llm,str(tmp_path),instance.ctx.logger)
     instance._information=Mock(tick=AsyncMock(return_value={"news":0,"search":0,"associated":0}))
     instance._memory=SimpleNamespace(ensure_daily=AsyncMock())
-    for name in ("_rest","_proactive","_continuity","_group_observer","_relay","_bookshelf","_creation","_admin"):
+    for name in ("_rest","_proactive","_continuity","_group_observer","_relay","_bookshelf","_admin"):
         setattr(instance,name,Mock())
     instance._settle_relationships=AsyncMock()
     novels=tmp_path/"novels"; novels.mkdir()
@@ -51,7 +50,7 @@ def assert_private_text_absent(plugin,*values):
         assert secret not in logs
 
 
-def test_reading_executes_with_network_and_creation_disabled(plugin):
+def test_reading_executes_with_network_disabled(plugin):
     async def scenario():
         await plugin._schedule.ensure_day(at())
         before=await context(plugin)

@@ -13,7 +13,7 @@ from maibot_sdk import Field, PluginConfigBase
 from pydantic import TypeAdapter, field_validator, model_validator
 
 PLUGIN_VERSION = "1.1.0"
-CONFIG_SCHEMA_VERSION = "1.16.0"
+CONFIG_SCHEMA_VERSION = "1.17.0"
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -333,84 +333,6 @@ class SocialGroupProfile(PluginConfigBase):
     def normalize_text(cls, value: Any) -> str:
         return _qq_id(value,"QQ群")
 
-class CreationSettings(PluginConfigBase):
-    """书柜、阅读批注与分阶段创作设置。"""
-
-    __ui_label__: ClassVar[str] = "书柜与创作"
-    __ui_order__: ClassVar[int] = 12
-
-    enabled: bool = Field(default=False, description="启用闲暇创作巡检。",
-        json_schema_extra=_ui("启用书柜创作", "默认关闭；启用后仍需确认 SQLite 明文存储风险。", 0,
-                              label_en="Enable Bookshelf Creation", hint_en="Disabled by default and requires plaintext-storage acknowledgement."))
-    plaintext_storage_acknowledged: bool = Field(default=False, description="确认作品和私人文本以 SQLite 明文保存。",
-        json_schema_extra=_ui("确认明文存储风险", "数据库文件权限由服务器管理员负责；未确认时不会启动创作和外部阅读。", 1,
-                              label_en="Acknowledge Plaintext Storage", hint_en="Creation stays blocked until the server file-permission risk is acknowledged."))
-    patrol_interval_minutes: int = Field(default=60, ge=10, le=1440, description="创作巡检间隔。",
-        json_schema_extra=_ui("创作巡检间隔（分钟）", "默认每小时检查一次空档，不代表每次都会创作。", 2,
-                              label_en="Creation Patrol Interval", hint_en="How often idle-time creation eligibility is checked."))
-    daily_max: int = Field(default=1, ge=0, le=5, description="每日最多归档作品数。",
-        json_schema_extra=_ui("每日作品上限", "默认 1；失败运行不计入已归档作品。", 3,
-                              label_en="Daily Work Limit", hint_en="Maximum archived works per day; failed runs do not count."))
-    allowed_schedule_types: list[str] = Field(default_factory=lambda:["leisure","rest"], description="允许创作的日程类型。",
-        json_schema_extra=_ui("允许创作的日程", "建议只保留 leisure 和 rest。", 5,
-                              label_en="Allowed Schedule Types", hint_en="Usually leisure and rest only."))
-    work_types: list[str] = Field(
-        default_factory=lambda:["novel_fragment","poem","essay","screenplay","storyboard","character","worldbuilding"],
-        description="允许生成的作品类型。",
-        json_schema_extra=_ui("作品类型", "可选小说片段、诗、随笔、短剧、分镜、角色和世界观。", 6,
-                              label_en="Work Types", hint_en="Allowed narrative and design formats."))
-    public_works_enabled: bool = Field(default=True, description="允许无私密来源的作品公开给朋友。",
-        json_schema_extra=_ui("允许公开作品", "日记和私密阅读来源仍会强制保持 private。", 7,
-                              label_en="Allow Public Works", hint_en="Diary and private-reading sources remain private."))
-    create_share_opportunity: bool = Field(default=True, description="归档后生成低频分享契机。",
-        json_schema_extra=_ui("允许分享完成作品", "私人作品只会定向给主人，公开作品仍由 Planner 和主动额度终审。", 8,
-                              label_en="Share Archived Works", hint_en="Private works target the owner; public works still require Planner review."))
-    inspiration_lookback_days: int = Field(default=7, ge=1, le=90, description="灵感来源回看天数。",
-        json_schema_extra=_ui("灵感回看天数", "只读取麦麦自己的生活和日记摘要。", 9,
-                              label_en="Inspiration Lookback", hint_en="Reads Mai's own life and diary summaries only."))
-    max_body_chars: int = Field(default=4000, ge=500, le=16000, description="作品正文最大字符数。",
-        json_schema_extra=_ui("作品正文上限", "用于限制模型成本和 SQLite 文本体积。", 10,
-                              label_en="Maximum Work Length", hint_en="Limits model cost and SQLite text size."))
-    external_reading_enabled: bool = Field(default=False, description="从可选插件 API 读取素材摘要。",
-        json_schema_extra=_ui("启用外部阅读联动", "默认关闭；只调用下方插件 API，不直接联网。", 11,
-                              label_en="Enable External Reading", hint_en="Calls an optional plugin API only and performs no direct networking."))
-    external_reading_api_name: str = Field(default="", description="外部阅读插件公开 API 名称。",
-        json_schema_extra=_ui("外部阅读 API", "例如 other-plugin.list_reading_items；留空不会调用。", 12,
-                              label_en="External Reading API", hint_en="Public plugin API name; left empty to disable calls."))
-    external_reading_max_items: int = Field(default=3, ge=1, le=20, description="每次最多读取素材数。",
-        json_schema_extra=_ui("每次阅读素材上限", "忽略二进制，只处理标题和有限长度文字。", 13,
-                              label_en="External Reading Item Limit", hint_en="Binary fields are ignored; only bounded text is processed."))
-    reading_annotation_enabled: bool = Field(default=True, description="为外部阅读摘要生成第一人称批注。",
-        json_schema_extra=_ui("生成阅读批注", "批注保持 private，朋友无权读取。", 14,
-                              label_en="Generate Reading Annotations", hint_en="Annotations remain private and unavailable to friends."))
-    continuation_enabled: bool = Field(default=True, description="启用书柜续写：有资格的旧书可按概率续写下一章。",
-        json_schema_extra=_ui("启用续写旧书", "关闭后与仅创作全新作品的行为完全一致，可一键回退。", 15,
-                              label_en="Enable Bookshelf Continuation", hint_en="Disable to always create brand-new works instead of continuing old ones."))
-    continuation_probability: float = Field(default=0.65, ge=0, le=1, description="存在有资格旧书时选择续写的概率。",
-        json_schema_extra=_ui("续写概率", "0.65 表示约 2/3 的日子增厚旧书、1/3 开新书；1.0 永远先续旧书，0.0 永久只开新书。", 16,
-                              label_en="Continuation Probability", hint_en="Chance of continuing an eligible old book; 1.0 always continues, 0.0 never does."))
-    continuation_min_gap_days: int = Field(default=1, ge=0, le=30, description="同一本书两章之间的最小间隔天数。",
-        json_schema_extra=_ui("续写最小间隔（天）", "按上一章归档时间判断；必须小于续写停滞天数，否则候选窗口为空、续写静默失效；0 允许同一天续写。", 17,
-                              label_en="Continuation Min Gap (days)", hint_en="Minimum days between two chapters of the same book, measured from the last archived chapter."))
-    continuation_max_chapters: int = Field(default=8, ge=2, le=100, description="单本书最多续写的章节数。",
-        json_schema_extra=_ui("单本书章节上限", "达到上限视为完结、不再续写，把机会让给新书。", 18,
-                              label_en="Maximum Chapters per Book", hint_en="A book stops being continued once it reaches this many chapters."))
-    continuation_stale_days: int = Field(default=30, ge=1, le=365, description="多少天没有新章节的书视为完结。",
-        json_schema_extra=_ui("续写停滞天数", "超过该天数没有新章节的书不再续写；必须大于续写最小间隔，否则候选窗口为空、续写静默失效。", 19,
-                              label_en="Continuation Stale Days", hint_en="Books without a new chapter for this many days are treated as finished."))
-    continuation_work_types: list[str] = Field(
-        default_factory=lambda:["novel_fragment","screenplay","storyboard","worldbuilding","character"],
-        description="允许续写的作品类型；运行时与作品类型取交集。",
-        json_schema_extra=_ui("可续写的体裁", "默认只保留连载型体裁；诗与随笔以单篇完整性为美，不参与续写。与上方作品类型的交集为空等于禁用续写。", 20,
-                              label_en="Continuable Work Types", hint_en="Intersected with Work Types; poems and essays are excluded by default."))
-    continuation_context_chapters: int = Field(default=3, ge=1, le=10, description="续写时向模型回看的最近章节数。",
-        json_schema_extra=_ui("回看章节数", "控制 Prompt 体积与 Token 成本的线性上限。", 21,
-                              label_en="Context Chapters", hint_en="How many recent chapters are replayed into the continuation prompt."))
-    continuation_chapter_tail_chars: int = Field(default=400, ge=0, le=2000, description="每章回看携带的正文字尾字符数。",
-        json_schema_extra=_ui("每章正文字尾字符", "0 表示只回看章节提纲、不带上文，进一步压低成本。", 22,
-                              label_en="Chapter Tail Characters", hint_en="Trailing body characters replayed per chapter; zero replays outlines only."))
-
-
 class EnvironmentSettings(PluginConfigBase):
     """时间与现实天气背景配置。"""
 
@@ -505,13 +427,13 @@ class MemorySettings(PluginConfigBase):
 
 
 class NetworkSettings(PluginConfigBase):
-    """宿主统一联网：总开关、搜索工具、搜索历史、见闻关联、新闻与主动探索。"""
+    """联网总开关、宿主搜索、内置新闻源与见闻关联。"""
 
     __ui_label__: ClassVar[str] = "联网"
     __ui_order__: ClassVar[int] = 11
 
     enabled: bool = Field(default=False,description="联网总开关：联网工具、新闻阅读与主动探索的共同前提。",json_schema_extra=_ui(
-        "启用联网","关闭后联网工具不可用、新闻与探索跳过；服务本身在主程序「模型设置→功能分配→联网搜索」配置。",0,
+        "启用联网","关闭后联网工具、新闻与探索均跳过；内置新闻源可直接读取，搜索服务在主程序配置。",0,
         label_en="Enable Networking",hint_en="Master switch for the web-search tool, news reading and exploration."))
     tool_enabled: bool = Field(default=True,description="允许麦麦按需调用联网搜索工具。",json_schema_extra=_ui(
         "允许麦麦使用联网搜索工具","总开关之上的工具子开关；工具只返回搜索摘要，不会直接发送消息。",1,
@@ -538,7 +460,7 @@ class NetworkSettings(PluginConfigBase):
         "搜索历史保留天数","到期自动清理；新闻与探索笔记仍按各自保留期管理。",5,
         label_en="Search History Retention (days)",hint_en="Expired history rows are cleaned automatically."))
     association_enabled: bool = Field(default=True,description="判断外界信息与麦麦自身的关系。",json_schema_extra=_ui(
-        "启用自我关联","先判断与人格、状态、兴趣、创作或关系是否有关，再考虑分享。",6,label_en="Enable Self-association",hint_en="Relate external information to Mai before considering sharing."))
+        "启用自我关联","先判断与人格、状态、兴趣或关系是否有关，再考虑分享。",6,label_en="Enable Self-association",hint_en="Relate external information to Mai before considering sharing."))
     association_threshold: float = Field(default=0.65,ge=0,le=1,description="创建主动契机的最低关联分。",json_schema_extra=_ui(
         "关联分数阈值","越高越克制；低于阈值只保留为近期见闻。",7,label_en="Association Threshold",hint_en="Items below this score remain notes and do not create opportunities."))
     proactive_share_enabled: bool = Field(default=True,description="允许高关联见闻创建主动契机。",json_schema_extra=_ui(
@@ -546,7 +468,12 @@ class NetworkSettings(PluginConfigBase):
     context_item_limit: int = Field(default=3,ge=0,le=10,description="被动上下文最多包含的近期见闻数。",json_schema_extra=_ui(
         "近期见闻上下文数量","设为 0 可只积累记录、不注入被动回复。",9,label_en="Discovery Context Items",hint_en="Set to zero to store discoveries without passive context injection."))
     news_enabled: bool = Field(default=False,description="启用低频新闻阅读。",json_schema_extra=_ui(
-        "启用新闻阅读","总开关之上的新闻子开关；阅读走宿主统一联网。",10,label_en="Enable News Reading",hint_en="News-level switch under the master switch."))
+        "启用新闻阅读","总开关之上的新闻子开关；优先内置订阅源，无结果时使用宿主搜索。",10,label_en="Enable News Reading",hint_en="News-level switch under the master switch."))
+    news_sources: list[Literal["ithome","solidot","sspai"]] = Field(
+        default_factory=lambda:["ithome","solidot","sspai"],description="内置新闻订阅源；空列表表示仅使用宿主搜索。",
+        json_schema_extra=_ui("内置新闻源","默认 IT之家、Solidot、少数派；读取公开 RSS，不向订阅源发送聊天内容。",10,
+                              label_en="Built-in News Sources",hint_en="Public RSS feeds; an empty list uses host search only.",
+                              enum_labels={"ithome":"IT之家","solidot":"Solidot","sspai":"少数派"}))
     news_daily_max: int = Field(default=1,ge=0,le=12,description="每天最多发起的新闻阅读次数。",json_schema_extra=_ui(
         "每日新闻阅读次数","默认 1 次；失败或空结果也计入，避免持续请求。",11,label_en="Daily News Reads",hint_en="Failures and empty results count to prevent repeated requests."))
     news_full_text_count: int = Field(default=3,ge=0,le=3,description="最多继续读取正文的结果数。",json_schema_extra=_ui(
@@ -744,18 +671,15 @@ class ModelRoutingSettings(PluginConfigBase):
 
     fast_task: str = Field(default="utils", description="快速整理任务名。", json_schema_extra=_ui("快速任务", "默认 utils，用于连续话题等轻量任务。", 0, label_en="Fast Task", hint_en="MaiBot task name for lightweight analysis."))
     reasoning_task: str = Field(default="planner", description="推理任务名。", json_schema_extra=_ui("推理任务", "默认 planner，用于搜索规划、自我关联等复杂判断；日常任务窗口无需模型。", 1, label_en="Reasoning Task", hint_en="MaiBot task name for reasoning."))
-    creative_task: str = Field(default="replyer", description="创作任务名。", json_schema_extra=_ui("创作任务", "默认 replyer，用于日记和叙事文本。", 2, label_en="Creative Task", hint_en="MaiBot task name for narrative generation."))
+    creative_task: str = Field(default="replyer", description="日记与阅读批注的写作任务名。", json_schema_extra=_ui("写作任务", "默认 replyer，用于日记和阅读批注。", 2, label_en="Writing Task", hint_en="MaiBot task name for diary and reading annotations."))
     continuity_task: str = Field(default="", description="连续话题任务覆盖。", json_schema_extra=_ui("话题整理任务覆盖", "留空继承快速任务。", 6, label_en="Continuity Override", hint_en="Leave empty to inherit fast task."))
-    diary_task: str = Field(default="", description="日记任务覆盖。", json_schema_extra=_ui("日记任务覆盖", "留空继承创作任务。", 9, label_en="Diary Override", hint_en="Leave empty to inherit creative task."))
+    diary_task: str = Field(default="", description="日记任务覆盖。", json_schema_extra=_ui("日记任务覆盖", "留空继承写作任务。", 9, label_en="Diary Override", hint_en="Leave empty to inherit writing task."))
     date_analysis_task: str = Field(default="", description="日期分析任务覆盖。", json_schema_extra=_ui("日期分析任务覆盖", "留空继承快速任务。", 10, label_en="Date Analysis Override", hint_en="Leave empty to inherit fast task."))
     news_task: str = Field(default="", description="新闻整理任务覆盖。", json_schema_extra=_ui("新闻整理任务覆盖", "留空继承快速任务。", 11, label_en="News Digest Override", hint_en="Leave empty to inherit fast task."))
     search_task: str = Field(default="", description="主动搜索任务覆盖。", json_schema_extra=_ui("主动搜索任务覆盖", "留空继承推理任务。", 12, label_en="Search Planning Override", hint_en="Leave empty to inherit reasoning task."))
     relevance_task: str = Field(default="", description="自我关联任务覆盖。", json_schema_extra=_ui("自我关联任务覆盖", "留空继承推理任务。", 13, label_en="Self-association Override", hint_en="Leave empty to inherit reasoning task."))
     group_judgment_task: str = Field(default="", description="群聊公开话题判断任务覆盖。", json_schema_extra=_ui("群聊判断任务覆盖", "留空继承快速任务。", 15, label_en="Group Judgment Override", hint_en="Leave empty to inherit fast task."))
-    creation_outline_task: str = Field(default="", description="创作提纲任务覆盖。", json_schema_extra=_ui("创作提纲任务覆盖", "留空继承推理任务。", 17, label_en="Creation Outline Override", hint_en="Leave empty to inherit reasoning task."))
-    creation_body_task: str = Field(default="", description="创作正文任务覆盖。", json_schema_extra=_ui("创作正文任务覆盖", "留空继承创作任务。", 18, label_en="Creation Body Override", hint_en="Leave empty to inherit creative task."))
-    creation_review_task: str = Field(default="", description="创作审校任务覆盖。", json_schema_extra=_ui("创作审校任务覆盖", "留空继承推理任务。", 19, label_en="Creation Review Override", hint_en="Leave empty to inherit reasoning task."))
-    reading_annotation_task: str = Field(default="", description="阅读批注任务覆盖。", json_schema_extra=_ui("阅读批注任务覆盖", "留空继承创作任务。", 20, label_en="Reading Annotation Override", hint_en="Leave empty to inherit creative task."))
+    reading_annotation_task: str = Field(default="", description="阅读批注任务覆盖。", json_schema_extra=_ui("阅读批注任务覆盖", "留空继承写作任务。", 20, label_en="Reading Annotation Override", hint_en="Leave empty to inherit writing task."))
 
 
     max_output_tokens: int = Field(default=0, ge=0, description="模型输出 token 上限；0=不限制，由服务商决定。", json_schema_extra=_ui("输出 token 上限", "0=不限制（推荐）。推理模型的思考链占用输出预算，写死小上限会把正文挤成空响应；仅在对成本敏感时设正数。", 22, label_en="Max Output Tokens", hint_en="0 = unlimited (provider decides). Tight caps starve content on reasoning models."))
@@ -772,7 +696,7 @@ class UsageSettings(PluginConfigBase):
 
 
 class ReadingSettings(PluginConfigBase):
-    """从本地真实文本分段阅读，进度和笔记独立于创作功能。"""
+    """从本地真实文本分段阅读，保存进度和私人笔记。"""
 
     __ui_label__: ClassVar[str] = "小说阅读"
     __ui_order__: ClassVar[int] = 8
@@ -906,11 +830,6 @@ class MaiLifeSettings(PluginConfigBase):
         default_factory=NetworkSettings,
         json_schema_extra=_ui("联网", "总开关、搜索工具、搜索历史、见闻关联、新闻与主动探索。", 11,
                               label_en="Networking", hint_en="Master switch, tool, history, discovery, news and exploration."),
-    )
-    creation: CreationSettings = Field(
-        default_factory=CreationSettings,
-        json_schema_extra=_ui("书柜与创作", "作品、日记、阅读批注和分阶段创作。", 12,
-                              label_en="Bookshelf and Creation", hint_en="Works, diaries, reading notes and staged creation."),
     )
     models: ModelRoutingSettings = Field(
         default_factory=ModelRoutingSettings,

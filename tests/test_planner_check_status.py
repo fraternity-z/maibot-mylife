@@ -19,11 +19,12 @@ def test_config_summary_keeps_only_unified_interval(plugin_module,interval):
     plugin=plugin_module.MaiLifePlugin()
     plugin.config=plugin_module.MaiLifeSettings()
     plugin.config.proactive.patrol_interval_minutes=interval
-    plugin.config.creation.patrol_interval_minutes=23
     with patch.object(plugin_module.MaiLifePlugin,"_ready",new_callable=PropertyMock,return_value=True):
         result=asyncio.run(plugin.webui_config_summary())
     assert result["proactive"]["patrol_interval_minutes"]==interval
-    assert result["creation"]["patrol_interval_minutes"]==23
+    assert "creation" not in result and "creation" not in result["editable"]
+    assert result["network"]["news_sources"]==["ithome","solidot","sspai"]
+    assert "news_sources" not in result["editable"]["network"]
     assert result["editable"]["proactive"]["patrol_interval_minutes"]=="int"
     assert "min_interval_minutes" not in result["proactive"]
     assert "min_interval_minutes" not in result["editable"]["proactive"]
@@ -68,14 +69,16 @@ def test_system_displays_and_searches_section_specific_interval(search):
     render="function renderConfig() {"+source.split("function renderConfig() {",1)[1].split(
         "// ---- 配置回写编辑器",1)[0]
     state={"config":{"proactive":{"patrol_interval_minutes":7},
-                     "creation":{"patrol_interval_minutes":23}},"cfgSearch":search}
+                     "network":{"news_sources":["ithome","solidot","sspai"]}},"cfgSearch":search}
     script=("const state="+json.dumps(state)+";const nodes={};const esc=String;"
         "const document={getElementById(id){return nodes[id]??={};}};"+labels+render+
         "renderConfig();console.log(nodes['cfg-cards-grid'].innerHTML);")
     result=subprocess.run([node],input=script,encoding="utf-8",capture_output=True,timeout=15)
     assert result.returncode==0, result.stderr
     assert "主动判断与发送间隔（分）" in result.stdout
-    assert ('后台巡检间隔(分)' in result.stdout) is (not search)
+    assert ('内置新闻源' in result.stdout) is (not search)
+    assert ('ithome,solidot,sspai' in result.stdout) is (not search)
+    assert 'data-key="news_sources"' not in result.stdout
 
 
 @pytest.mark.parametrize("reason,label",[("planner_interval","Planner 判断间隔未到"),("low_score","生活参考未达阈值")])

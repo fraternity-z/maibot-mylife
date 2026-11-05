@@ -180,7 +180,7 @@ def integrated_information(services,tmp_path):
     storage=importlib.import_module("mai_integration_tests.core.storage")
     settings=importlib.import_module("mai_integration_tests.config")
     cfg=settings.MaiLifeSettings(network={"enabled":True,"news_enabled":True,"news_daily_max":1,
-        "news_full_text_count":1,"search_enabled":False,"max_attempts":1})
+        "news_full_text_count":1,"search_enabled":False,"max_attempts":1,"news_sources":[]})
     store=storage.LifeStore(str(tmp_path),clock=lambda:NOW.timestamp())
     asyncio.run(store.initialize())
     web=SimpleNamespace(search=AsyncMock(),fetch=AsyncMock(return_value={"content":"正文独有知识：本次观测发现新卫星。"}))

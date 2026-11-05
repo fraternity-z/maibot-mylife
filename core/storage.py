@@ -331,7 +331,7 @@ class LifeStore:
               id INTEGER PRIMARY KEY AUTOINCREMENT, relay_id TEXT NOT NULL,
               status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL
             );
-            -- 书柜采用文档、不可变修订和运行记录三层结构，便于失败恢复与权限过滤。
+            -- 日记与阅读笔记共用文档和不可变修订，旧作品保留但不再展示。
             CREATE TABLE IF NOT EXISTS bookshelf_documents(
               id TEXT PRIMARY KEY, doc_type TEXT NOT NULL, work_type TEXT NOT NULL DEFAULT '',
               title TEXT NOT NULL, privacy TEXT NOT NULL, status TEXT NOT NULL,
@@ -347,19 +347,6 @@ class LifeStore:
               revision_number INTEGER NOT NULL, stage TEXT NOT NULL,
               content TEXT NOT NULL, model_task TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL,
               UNIQUE(document_id,revision_number)
-            );
-            CREATE TABLE IF NOT EXISTS creation_inspirations(
-              id TEXT PRIMARY KEY, source_kind TEXT NOT NULL, source_ref TEXT NOT NULL,
-              prompt_digest TEXT NOT NULL, privacy_ceiling TEXT NOT NULL,
-              score REAL NOT NULL DEFAULT 0, status TEXT NOT NULL,
-              created_at REAL NOT NULL, expires_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_creation_inspiration_pending
-              ON creation_inspirations(status,score,created_at);
-            CREATE TABLE IF NOT EXISTS creation_runs(
-              id TEXT PRIMARY KEY, inspiration_id TEXT NOT NULL, document_id TEXT NOT NULL DEFAULT '',
-              status TEXT NOT NULL, started_at REAL NOT NULL, completed_at REAL NOT NULL DEFAULT 0,
-              error_summary TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS reading_notes(
               id TEXT PRIMARY KEY, source_api TEXT NOT NULL, external_id TEXT NOT NULL,
@@ -635,7 +622,8 @@ class LifeStore:
         async with self._lock:
             rows = self.conn.execute(
                 """SELECT * FROM proactive_opportunities
-                WHERE consumed_at=0 AND expires_at>? AND framework_id NOT LIKE 'dream:%' ORDER BY weight DESC""",
+                WHERE consumed_at=0 AND expires_at>? AND framework_id NOT LIKE 'dream:%'
+                AND framework_id NOT LIKE 'creation:%' AND privacy!='public_work' ORDER BY weight DESC""",
                 (now,),
             ).fetchall()
             return [dict(r) for r in rows]
@@ -1232,181 +1220,10 @@ class LifeStore:
             ).fetchone()
             return {"count":int(row[0] or 0),"last_at":float(row[1] or 0)} if row else {"count":0,"last_at":0}
 
-    async def add_creation_inspiration(self, item: dict[str, Any]) -> bool:
-        async with self._lock:
-            cursor=self.conn.execute(
-                """INSERT OR IGNORE INTO creation_inspirations
-                (id,source_kind,source_ref,prompt_digest,privacy_ceiling,score,status,created_at,expires_at)
-                VALUES(?,?,?,?,?,?, 'pending',?,?)""",
-                (item["id"],item["source_kind"][:40],item["source_ref"][:160],item["prompt_digest"][:2000],
-                 "public" if item.get("privacy_ceiling")=="public" else "private",
-                 max(0,min(1,float(item.get("score") or 0))),float(item["created_at"]),float(item["expires_at"])),
-            )
-            self.conn.commit(); return cursor.rowcount==1
-
-    async def pending_creation_inspirations(self, now: float, limit: int=10) -> list[dict[str, Any]]:
-        async with self._lock:
-            rows=self.conn.execute(
-                """SELECT * FROM creation_inspirations WHERE status='pending' AND expires_at>?
-                AND source_kind NOT IN ('dream','life','scene')
-                ORDER BY score DESC,created_at DESC LIMIT ?""",(now,max(1,min(100,int(limit))))
-            ).fetchall()
-            return [dict(row) for row in rows]
-
-    async def claim_creation_inspiration(self, inspiration_id: str) -> bool:
-        """条件更新防止后台巡检和管理员命令同时消费同一份灵感。"""
-        async with self._lock:
-            cursor=self.conn.execute(
-                "UPDATE creation_inspirations SET status='creating' WHERE id=? AND status='pending'",
-                (inspiration_id,),
-            )
-            self.conn.commit(); return cursor.rowcount==1
-
-    async def recover_creation_claims(self, now: float) -> None:
-        """Runner 异常退出后恢复未完成灵感，并封存残留的 running 记录。"""
-        async with self._lock:
-            with self._tx() as conn:
-                running=conn.execute("SELECT document_id FROM creation_runs WHERE status='running'").fetchall()
-                document_ids=[str(row[0]) for row in running if str(row[0] or "")]
-                if document_ids:
-                    marks=",".join("?" for _ in document_ids)
-                    # 已有 final 修订的文档书体完好（续写中被硬打断的旧书，或终稿落库后才被打断的新书），
-                    # 恢复 archived 让它继续留在书柜，且不刷新 updated_at/archived_at 白吃当日额度；
-                    # 只有什么都没留下的新书才标记 failed。
-                    conn.execute(
-                        f"""UPDATE bookshelf_documents SET status='archived'
-                        WHERE id IN ({marks})
-                        AND id IN (SELECT document_id FROM bookshelf_revisions WHERE stage='final')""",
-                        document_ids,
-                    )
-                    conn.execute(
-                        f"""UPDATE bookshelf_documents SET status='failed',updated_at=?
-                        WHERE id IN ({marks})
-                        AND id NOT IN (SELECT document_id FROM bookshelf_revisions WHERE stage='final')""",
-                        (now,*document_ids),
-                    )
-                conn.execute(
-                    "UPDATE creation_runs SET status='interrupted',completed_at=?,error_summary='Runner interrupted' WHERE status='running'",
-                    (now,),
-                )
-                conn.execute("UPDATE creation_inspirations SET status='pending' WHERE status='creating' AND expires_at>?",(now,))
-                conn.execute("UPDATE creation_inspirations SET status='expired' WHERE status='creating' AND expires_at<=?",(now,))
-
-    async def mark_creation_inspiration(self, inspiration_id: str, status: str) -> None:
-        async with self._lock:
-            self.conn.execute("UPDATE creation_inspirations SET status=? WHERE id=?",(status[:24],inspiration_id))
-            self.conn.commit()
-
-    async def archived_work_count(self, start: float, end: float) -> int:
-        """当日归档章节数：每条 final 终稿修订算一章，同一本书当天续写多章也逐章计入每日额度。
-
-        不能按文档 archived_at 计数：续写只是把同一文档的 archived_at 刷新到当天，
-        同日的第二章起计数不再增长，continuation_min_gap_days=0 时每日上限会形同虚设。
-        每次成功归档（新书或续写）恰好落库一条 final 修订，按修订计数即"每章花一个额度"。
-        """
-        async with self._lock:
-            row=self.conn.execute(
-                """SELECT COUNT(*) FROM bookshelf_revisions r
-                JOIN bookshelf_documents d ON d.id=r.document_id
-                WHERE d.doc_type='work' AND r.stage='final'
-                AND r.created_at>=? AND r.created_at<?""",(start,end)
-            ).fetchone()
-            return int(row[0]) if row else 0
-
-    async def continuable_works(self, work_types: list[str], *, stale_before: float, max_chapters: int,
-                                min_gap_before: float, limit: int = 50) -> list[dict[str, Any]]:
-        """书柜续写候选：只统计 final 修订的章节数与最近章节时间，等最久的书优先。
-
-        章节数上限、最小间隔与停滞判定全部下推 SQL，避免候选集被服务侧过滤饿死；
-        隐私守卫依赖当日灵感，由调用方过滤。
-        """
-        async with self._lock:
-            types=[str(item)[:40] for item in work_types if str(item)]
-            if not types:return []
-            marks=",".join("?" for _ in types)
-            rows=self.conn.execute(
-                f"""SELECT d.id,d.work_type,d.title,d.privacy,d.summary,d.created_at,
-                (SELECT COUNT(*) FROM bookshelf_revisions r WHERE r.document_id=d.id AND r.stage='final') AS chapters,
-                (SELECT COALESCE(MAX(r.created_at),0) FROM bookshelf_revisions r
-                 WHERE r.document_id=d.id AND r.stage='final') AS last_chapter_at
-                FROM bookshelf_documents d
-                WHERE d.doc_type='work' AND d.status='archived' AND d.work_type IN ({marks})
-                AND last_chapter_at>=? AND last_chapter_at<=? AND chapters<?
-                ORDER BY last_chapter_at ASC LIMIT ?""",
-                (*types,float(stale_before),float(min_gap_before),max(1,int(max_chapters)),
-                 max(1,min(200,int(limit)))),
-            ).fetchall()
-            return [dict(row) for row in rows]
-
-    async def create_bookshelf_document(self, item: dict[str, Any]) -> bool:
-        async with self._lock:
-            cursor=self.conn.execute(
-                """INSERT OR IGNORE INTO bookshelf_documents
-                (id,doc_type,work_type,title,privacy,status,current_revision,source_kind,source_ref,summary,
-                 created_at,updated_at,archived_at)
-                VALUES(?,?,?,?,?,?,0,?,?,?,?,?,0)""",
-                (item["id"],item.get("doc_type","work")[:24],item.get("work_type","")[:40],item.get("title","未命名")[:160],
-                 "public" if item.get("privacy")=="public" else "private",item.get("status","inspiration")[:24],
-                 item.get("source_kind","")[:40],item.get("source_ref","")[:160],item.get("summary","")[:1000],
-                 float(item["created_at"]),float(item["created_at"])),
-            )
-            self.conn.commit(); return cursor.rowcount==1
-
-    async def add_bookshelf_revision(self, document_id: str, stage: str, content: str, model_task: str,
-                                     now: float, *, set_current: bool=True, status: str="") -> int:
-        """追加不可变书柜修订，并可原子推进文档当前版本和流水线状态。"""
-        async with self._lock:
-            with self._tx() as conn:
-                row=conn.execute(
-                    "SELECT COALESCE(MAX(revision_number),0)+1 FROM bookshelf_revisions WHERE document_id=?",
-                    (document_id,),
-                ).fetchone(); revision=int(row[0] if row else 1)
-                conn.execute(
-                    """INSERT INTO bookshelf_revisions
-                    (document_id,revision_number,stage,content,model_task,created_at) VALUES(?,?,?,?,?,?)""",
-                    (document_id,revision,stage[:24],content[:20000],model_task[:80],now),
-                )
-                if set_current:
-                    archived=now if status=="archived" else 0
-                    conn.execute(
-                        """UPDATE bookshelf_documents SET current_revision=?,status=COALESCE(NULLIF(?,''),status),
-                        updated_at=?,archived_at=CASE WHEN ?>0 THEN ? ELSE archived_at END WHERE id=?""",
-                        (revision,status[:24],now,archived,archived,document_id),
-                    )
-                return revision
-
-    async def update_bookshelf_document(self, document_id: str, *, title: str="", summary: str="",
-                                        privacy: str="", status: str="", now: float=0) -> None:
-        async with self._lock:
-            row=self.conn.execute("SELECT * FROM bookshelf_documents WHERE id=?",(document_id,)).fetchone()
-            if not row:return
-            self.conn.execute(
-                """UPDATE bookshelf_documents SET title=?,summary=?,privacy=?,status=?,updated_at=?,
-                archived_at=CASE WHEN ?='archived' THEN ? ELSE archived_at END WHERE id=?""",
-                (title[:160] or row["title"],summary[:1000] or row["summary"],
-                 ("public" if privacy=="public" else "private") if privacy else row["privacy"],
-                 status[:24] or row["status"],now or self.clock(),status,now or self.clock(),document_id),
-            )
-            self.conn.commit()
-
-    async def start_creation_run(self, run_id: str, inspiration_id: str, document_id: str, now: float) -> None:
-        async with self._lock:
-            self.conn.execute(
-                "INSERT INTO creation_runs(id,inspiration_id,document_id,status,started_at) VALUES(?,?,?,'running',?)",
-                (run_id,inspiration_id,document_id,now),
-            ); self.conn.commit()
-
-    async def finish_creation_run(self, run_id: str, status: str, now: float, error: str="") -> None:
-        async with self._lock:
-            self.conn.execute(
-                "UPDATE creation_runs SET status=?,completed_at=?,error_summary=? WHERE id=?",
-                (status[:24],now,error[:500],run_id),
-            ); self.conn.commit()
-
     async def list_bookshelf_documents(self, *, allow_private: bool, limit: int=20,
                                        doc_type: str="") -> list[dict[str, Any]]:
         async with self._lock:
-            clauses=["d.status='archived'"]; params:list[Any]=[]
+            clauses=["d.status='archived'","d.doc_type IN ('diary','reading_note')"]; params:list[Any]=[]
             if not allow_private:clauses.append("d.privacy='public'")
             if doc_type:clauses.append("d.doc_type=?"); params.append(doc_type)
             params.append(max(1,min(100,int(limit))))
@@ -1419,7 +1236,10 @@ class LifeStore:
 
     async def get_bookshelf_document(self, document_id: str, *, allow_private: bool) -> dict[str, Any]:
         async with self._lock:
-            row=self.conn.execute("SELECT * FROM bookshelf_documents WHERE id=?",(document_id,)).fetchone()
+            row=self.conn.execute(
+                "SELECT * FROM bookshelf_documents WHERE id=? AND doc_type IN ('diary','reading_note')",
+                (document_id,),
+            ).fetchone()
             if not row or (row["privacy"]=="private" and not allow_private):return {}
             data=dict(row)
             revisions=self.conn.execute(
@@ -1520,12 +1340,6 @@ class LifeStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    async def cleanup_creation(self, now: float) -> None:
-        async with self._lock:
-            self.conn.execute(
-                "UPDATE creation_inspirations SET status='expired' WHERE status='pending' AND expires_at<=?",(now,)
-            ); self.conn.commit()
-
     async def management_date_candidates(self, limit: int=100) -> list[dict[str, Any]]:
         async with self._lock:
             rows=self.conn.execute(
@@ -1541,6 +1355,7 @@ class LifeStore:
             rows=self.conn.execute(
                 """SELECT id,doc_type,work_type,title,privacy,status,current_revision,source_kind,
                 summary,created_at,updated_at,archived_at FROM bookshelf_documents
+                WHERE doc_type IN ('diary','reading_note')
                 ORDER BY updated_at DESC LIMIT ?""",(max(1,min(500,int(limit))),)
             ).fetchall()
             return [dict(row) for row in rows]
@@ -1556,16 +1371,6 @@ class LifeStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    async def management_creation_runs(self, limit: int=50) -> list[dict[str, Any]]:
-        async with self._lock:
-            rows=self.conn.execute(
-                """SELECT r.id,r.inspiration_id,r.document_id,r.status,r.started_at,r.completed_at,
-                d.title,d.privacy,d.work_type FROM creation_runs r
-                LEFT JOIN bookshelf_documents d ON d.id=r.document_id
-                ORDER BY r.started_at DESC LIMIT ?""",(max(1,min(200,int(limit))),)
-            ).fetchall()
-            return [dict(row) for row in rows]
-
     async def management_overview_counts(self) -> dict[str, int]:
         """使用 COUNT 聚合，避免概览数字受明细分页上限影响。"""
         async with self._lock:
@@ -1574,8 +1379,8 @@ class LifeStore:
                 (SELECT COUNT(*) FROM users WHERE enabled=1) AS users,
                 (SELECT COUNT(*) FROM users WHERE enabled=1 AND role='owner') AS owners,
                 (SELECT COUNT(*) FROM date_candidates WHERE status='pending') AS pending_dates,
-                (SELECT COUNT(*) FROM bookshelf_documents) AS bookshelf_documents,
-                (SELECT COUNT(*) FROM bookshelf_documents WHERE privacy='private') AS private_documents,
+                (SELECT COUNT(*) FROM bookshelf_documents WHERE doc_type IN ('diary','reading_note')) AS bookshelf_documents,
+                (SELECT COUNT(*) FROM bookshelf_documents WHERE privacy='private' AND doc_type IN ('diary','reading_note')) AS private_documents,
                 (SELECT COUNT(*) FROM proactive_events WHERE status='pending') AS pending_proactive"""
             ).fetchone()
             return {key:int(row[key] or 0) for key in row.keys()} if row else {}
@@ -1594,7 +1399,6 @@ class LifeStore:
                 conn.execute("DELETE FROM llm_usage_events WHERE created_at<?",(usage_before,))
                 conn.execute("DELETE FROM group_observations WHERE expires_at<=?",(now,))
                 conn.execute("UPDATE relay_candidates SET status='expired' WHERE expires_at<=? AND status IN ('pending','sending','queued')",(now,))
-                conn.execute("UPDATE creation_inspirations SET status='expired' WHERE status IN ('pending','creating') AND expires_at<=?",(now,))
                 if records_before>0:
                     # 只删终态行；已发送按 sent_at 计龄，未发送的终态按 expires_at 计龄。
                     conn.execute(
