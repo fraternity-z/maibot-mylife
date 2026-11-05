@@ -5,15 +5,16 @@ import asyncio
 import hashlib
 import json
 import time
-from typing import Any
+from typing import Any, Callable
 
 
 class RelayService:
     """只创建 Planner 转述任务，不直接发送消息或构造 ``at`` 消息段。"""
 
-    def __init__(self,ctx:Any,store:Any,config:Any,logger:Any,bot_name:str="麦麦")->None:
+    def __init__(self,ctx:Any,store:Any,config:Any,logger:Any,bot_name:str="麦麦",*,clock:Callable[[],float]=time.time)->None:
         self.ctx=ctx; self.store=store; self.config=config; self.logger=logger
         self.bot_name=bot_name
+        self.clock=clock
 
     def update_config(self,config:Any)->None:self.config=config
 
@@ -43,7 +44,7 @@ class RelayService:
         stream_id=str(stream.get("stream_id") or "").strip()
         group_name=str(stream.get("group_name") or stream.get("name") or "").strip()
         if stream_id:
-            await self.store.upsert_group_directory(group_id,group_name,stream_id,time.time())
+            await self.store.upsert_group_directory(group_id,group_name,stream_id,self.clock())
         return stream_id
 
     async def _resolve_group_stream(self,group_id:str)->str:
@@ -88,7 +89,7 @@ class RelayService:
         target_group_id=str(group.group_id).strip()
         stream_id=await self._resolve_group_stream(target_group_id)
         if not stream_id:return {"success":False,"error":"当前无法解析目标群会话；请确认 Bot 已加入该群且适配器已建立群聊流。"}
-        now=time.time(); relay_id="relay-"+hashlib.sha1(f"{stream_id}:{now}:{clean}".encode()).hexdigest()[:20]
+        now=self.clock(); relay_id="relay-"+hashlib.sha1(f"{stream_id}:{now}:{clean}".encode()).hexdigest()[:20]
         item={"id":relay_id,"kind":"explicit","target_group_id":target_group_id,
               "target_stream_id":stream_id,"summary":clean,
               "reason":"主人或管理员显式要求向白名单群转述；Planner 仍可因语境不合适选择沉默。",
@@ -115,17 +116,17 @@ class RelayService:
             return {"success":True,"relay_id":relay_id,"stream_id":stream_id,
                     "message":"已交给目标群 Planner 判断；Planner 沉默不会记为发送。"}
         except asyncio.CancelledError:
-            await self.store.set_relay_status(relay_id,"cancelled",time.time(),"trigger_cancelled")
+            await self.store.set_relay_status(relay_id,"cancelled",self.clock(),"trigger_cancelled")
             raise
         except Exception as exc:
-            await self.store.set_relay_status(relay_id,"failed",time.time(),type(exc).__name__)
+            await self.store.set_relay_status(relay_id,"failed",self.clock(),type(exc).__name__)
             self.logger.error(f"[MaiLife] 群转述 proactive.trigger 失败: {type(exc).__name__}")
             return {"success":False,"error":"转述请求发送失败，请稍后重试。"}
 
     async def prompt_context(self,session_id:str,host_task_id:str="")->str:
         # 主动轮优先按 Host task_id 取候选，避免同一群的旧转述污染新任务。
         item=(await self.store.relay_for_task(session_id,host_task_id) if host_task_id
-              else await self.store.pending_relay_context(session_id,time.time()))
+              else await self.store.pending_relay_context(session_id,self.clock()))
         if item and str(item.get("status") or "") not in ("pending","sending"):
             item={}  # 已 sent/expired 等终态不再注入背景，避免重复提示与泄漏
         if not item:return ""
@@ -142,7 +143,7 @@ class RelayService:
         if not session_id or not host_task_id:return False
         item=await self.store.relay_for_task(session_id,host_task_id)
         if not item:return False
-        status=str(item.get("status") or ""); now=time.time()
+        status=str(item.get("status") or ""); now=self.clock()
         if status in {"pending","sending"} and float(item.get("expires_at") or 0)<=now:
             await self.store.set_relay_status(str(item["id"]),"expired",now,"send_after_expiry")
             return True
@@ -152,7 +153,7 @@ class RelayService:
         """在平台发送前原子占用转述候选，并把候选 ID 附加到消息运行元数据。"""
         session_id=str(message.get("session_id") or "")
         if not session_id:return message,False
-        item=await self.store.reserve_relay_for_send(session_id,time.time(),host_task_id,allow_expired=allow_expired)
+        item=await self.store.reserve_relay_for_send(session_id,self.clock(),host_task_id,allow_expired=allow_expired)
         if not item:return message,False
         info=message.get("message_info")
         if not isinstance(info,dict):info={}; message["message_info"]=info
@@ -167,5 +168,5 @@ class RelayService:
         additional=info.get("additional_config") if isinstance(info.get("additional_config"),dict) else {}
         relay_id=str(additional.get("mai_life_relay_id") or "")
         if not relay_id:return False
-        await self.store.finish_relay_send(relay_id,bool(sent),time.time())
+        await self.store.finish_relay_send(relay_id,bool(sent),self.clock())
         return True

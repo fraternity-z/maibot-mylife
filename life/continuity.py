@@ -1,7 +1,6 @@
 """轻量连续话题元数据，不替代 MaiBot 自身长期记忆。"""
 from __future__ import annotations
 
-import time
 from typing import Any
 
 
@@ -15,7 +14,7 @@ class ContinuityService:
     async def refresh(self,user_id:str,current_intent:str)->None:
         """限频整理未完话题；模型不可用时保留旧话题并只更新本地意图。"""
         if not self.config.context.continuity_enabled:return
-        now=time.time(); interval=int(self.config.context.continuity_interval_minutes)*60
+        now=self.store.clock(); interval=int(self.config.context.continuity_interval_minutes)*60
         if now-self._last_runs.get(user_id,0)<interval:return
         self._last_runs[user_id]=now
         recent=await self.store.recent_interactions(user_id,8)

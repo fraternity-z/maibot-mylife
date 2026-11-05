@@ -26,7 +26,7 @@
 
 [plugin]
 # 配置结构版本，请勿手动修改。
-config_version = "1.13.0"
+config_version = "1.14.0"
 
 # 插件总开关。关闭后保留数据库，但停止状态维护、日程生成和主动消息。
 enabled = true
@@ -82,35 +82,16 @@ group_to_private_enabled = false
 
 [group]
 # ===== 群聊设置（独立于私聊）=====
-# 群聊休息闸门默认关闭。开启后，在群时间窗（按设定时间）或日程段型
-# （按日程判断）期间，群里只有含强制唤醒词的消息会被回复，其余静默
-# （不回复、不积压、不进主程序，因此不产生 Planner/Replyer/VLM 请求）。
-# 群闸门生效方式（与私聊闸门的生效方式相互独立，可分别选择）：
-# - time_window：按设定时间，只在下方群夜间/午休时间窗内生效
-#   （窗口仍受群闸门生效的日程类型约束：夜窗需含 sleep/rest、午休窗需含 nap）
-# - schedule：按日程判断，日程进入所列段型时即生效（任意时间，忽略时间窗）
-gate_mode = "time_window"
+# 开启后所有群使用同一概率回复策略；关闭则交回 MaiBot 原有群聊触发逻辑。
+gate_enabled = true
 
-gate_enabled = false
+# 每条非命令消息只采样一次；0=不回复，1=每条放行，关键词/@/图片不加权。
+reply_probability = 0.18
 
-# 群闸门作用范围：
-# - all：所有群开箱即用
-# - selected：只对白名单中开了「夜间静音」的群生效
-gate_scope = "all"
-
-# 群闸门生效的日程类型：gate_mode = schedule 时日程进入所列段型即群静音（任意时间）；
-# gate_mode = time_window 时不参与生效。与私聊 gate_segment_types 同构，
-# 默认只保留夜间睡眠和午休。
-gate_segment_types = ["sleep", "nap"]
-
-# 群夜间/午休时间窗：仅 gate_mode = time_window 时生效，支持跨午夜。
-night_start = "22:30"
-night_end = "08:00"
-nap_start = "12:00"
-nap_end = "14:30"
-
-# 群强制唤醒词：群消息含任意一词立即放行；独立于私聊词表。
-force_wake_terms = ["救命", "急事", "报警", "醒醒", "快醒", "叫醒", "出事了", "很难受", "撑不住", "危险", "轻生", "自杀"]
+# 工作时间按 environment.timezone，开始含、结束不含，支持跨午夜。
+# 起止相同表示全天；例如 "08:00" 到 "23:00" 表示每天8点至23点工作。
+work_start = "00:00"
+work_end = "00:00"
 
 # 群聊回复轮次注册：防止同一条群消息触发多次回复，按群号和发送者隔离。
 turn_enabled = true
@@ -129,18 +110,19 @@ group_share_daily_max = 1
 group_share_min_interval_minutes = 360
 
 # ===== 群聊白名单（逐群开关，放在节尾的子表）=====
-# 启用=参与观察与转述；观察=收集公开话题；转述=可被转述到私聊；夜间静音=群闸门「指定群」模式的管辖开关。
+# 启用=参与观察与转述；观察=收集公开话题；转述=可被转述到私聊。
 # 只填真实 QQ 群号，群名由 MaiBot 会话自动读取。需要多个群就整块复制。
 [[group.profiles]]
 group_id = ""
 enabled = false
 observe_enabled = false
 relay_target_enabled = false
-rest_gate_enabled = false
 
 
 [environment]
-# IANA 时区。中国大陆一般使用 Asia/Shanghai。
+# IANA 时区。中国大陆一般使用 Asia/Shanghai，不跟随服务器本地时区。
+# 插件自动使用 NTP 联网校时，UDP 不通时尝试 HTTPS 时间，每小时刷新。
+# 全部时间源不可达时延续上次校准；从未成功校准则回退系统 UTC 并告警。
 timezone = "Asia/Shanghai"
 
 # 天气城市。插件会自动把城市名解析成天气坐标，无需填写经纬度。
@@ -153,6 +135,9 @@ weather_refresh_minutes = 30
 
 
 [state]
+# 被叫醒后的生活状态维持时间，不影响回复策略。
+awake_grace_minutes = 30
+
 # 生活状态推进间隔，范围 1～60 分钟。推荐 10 分钟。
 tick_interval_minutes = 10
 
@@ -194,40 +179,11 @@ date_reminder_lead_days = [30, 7, 1, 0]
 
 
 [rest_gate]
-# 休息回复闸门默认关闭。开启后，睡眠或午休时可能不回复普通消息。
-enabled = false
-
-# 判醒模式：
-# - probability：规则边界 + 概率判断，速度快且不额外调用模型
-# - llm：规则边界 + LLM 判断，语义更准确但会增加延迟和模型消耗
-# 闸门生效方式：
-# - time_window：按设定时间，只在下方夜间/午休时间窗内生效
-# - schedule：按日程判断，日程进入「闸门生效的日程类型」所列段型时即生效
-#   （跟着日程作息走，忽略时间窗；晚安与入睡推迟同样跟随日程睡眠段）
-gate_mode = "time_window"
-
-mode = "probability"
-
-# probability 模式下，普通消息叫醒麦麦的概率。0.18 表示 18%。
-wake_probability = 0.18
-
-# llm 模式下的判醒阈值，范围 0～100。
-llm_threshold = 70
-
-# 被叫醒后多久不重复判醒，范围 0～240 分钟。
-awake_grace_minutes = 30
-
-# 闸门生效的日程类型：sleep / nap / rest。
-# gate_mode = schedule 时：日程进入所列段型即生效（主力开关，任意时间）；
-# gate_mode = time_window 时：本列表不参与闸门生效，仅用于判醒提示词描述。
-# 推荐只保留夜间睡眠和午休。
-gate_segment_types = ["sleep", "nap"]
-
-# 夜间/午休时间窗：仅 gate_mode = time_window 时生效；与结束时间相同则该窗口永不生效。
-night_start = "22:30"
-night_end = "08:00"
-nap_start = "12:00"
-nap_end = "14:30"
+# 保留旧节名兼容配置。私聊在工作时间内必定放行，不进行概率或关键词判断。
+# enabled=false 关闭时段限制，全天放行私聊；命令始终保留原有权限规则。
+enabled = true
+work_start = "00:00"
+work_end = "00:00"
 
 [context]
 enabled = true

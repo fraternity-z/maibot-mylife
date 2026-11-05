@@ -9,8 +9,9 @@ import shutil
 import sqlite3
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 SCHEMA_VERSION = 14
 # 长期运行记录（互动、主动事件、契机、转述候选/事件、跳过统计）的保留天数。
@@ -30,12 +31,13 @@ STATE_HISTORY_RETENTION_DAYS = 180
 
 class LifeStore:
     def __init__(self, data_dir: str, *, journal_mode: str = "memory",
-                 logger: Any = None) -> None:
+                 logger: Any = None, clock: Callable[[],float] = time.time) -> None:
         self.data_dir = Path(data_dir)
         self.path = self.data_dir / "mai_life.db"
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = asyncio.Lock()
         self._logger = logger
+        self.clock = clock
         # 测试用临时库默认 memory（回滚日志放内存，不落盘，避免 -journal 文件残留）；
         # 生产 data 库由 plugin.py 显式传入 delete，保留崩溃回滚保护。
         self._journal_mode = str(journal_mode or "memory").strip().casefold() or "memory"
@@ -67,7 +69,7 @@ class LifeStore:
         if self._conn is not None:
             self._conn.close(); self._conn=None
         if self.path.exists():
-            stamp=int(time.time()); backup=self.path.with_suffix(f".incompatible.{stamp}.db")
+            stamp=int(self.clock()); backup=self.path.with_suffix(f".incompatible.{stamp}.db")
             counter=1
             while backup.exists():
                 backup=self.path.with_suffix(f".incompatible.{stamp}.{counter}.db"); counter+=1
@@ -108,7 +110,7 @@ class LifeStore:
                 except Exception:pass
             self._conn = None
             if self.path.exists():
-                stamp=int(time.time()); backup = self.path.with_suffix(f".corrupt.{stamp}.db")
+                stamp=int(self.clock()); backup = self.path.with_suffix(f".corrupt.{stamp}.db")
                 counter=1
                 while backup.exists():
                     backup=self.path.with_suffix(f".corrupt.{stamp}.{counter}.db"); counter+=1
@@ -148,7 +150,7 @@ class LifeStore:
                 raise sqlite3.DatabaseError("schema_version 非法") from exc
             if version > SCHEMA_VERSION:
                 self.conn.close()
-                stamp=int(time.time()); backup = self.path.with_suffix(f".future-v{version}.{stamp}.db")
+                stamp=int(self.clock()); backup = self.path.with_suffix(f".future-v{version}.{stamp}.db")
                 counter=1
                 while backup.exists():
                     backup=self.path.with_suffix(f".future-v{version}.{stamp}.{counter}.db"); counter+=1
@@ -512,7 +514,7 @@ class LifeStore:
         if version < 14:
             self._migrate_to_v14()
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",(str(SCHEMA_VERSION),))
-        now = time.time()
+        now = self.clock()
         self.conn.execute(
             """INSERT OR IGNORE INTO global_state
             (id,energy,hunger,mood_valence,mood_arousal,health_status,health_note,
@@ -719,7 +721,7 @@ class LifeStore:
             with self._tx() as conn:
                 cursor=conn.execute(
                     "INSERT INTO dreams(created_at,content,mood_delta,energy_delta,sleep_started_at) VALUES(?,?,?,?,?)",
-                    (created_at or time.time(), content[:1000], mood_delta, energy_delta, sleep_started_at),
+                    (created_at or self.clock(), content[:1000], mood_delta, energy_delta, sleep_started_at),
                 )
                 dream_id=int(cursor.lastrowid)
                 clean=[str(item).strip()[:300] for item in (fragments or []) if str(item).strip()][:5]
@@ -784,7 +786,7 @@ class LifeStore:
             with self._tx() as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO detailed_scenes(framework_id,scene,state_deltas,created_at,applied) VALUES(?,?,?,?,0)",
-                    (framework_id, scene, json.dumps(deltas, ensure_ascii=False), time.time()),
+                    (framework_id, scene, json.dumps(deltas, ensure_ascii=False), self.clock()),
                 )
                 for item in opportunities:
                     conn.execute(
@@ -963,7 +965,7 @@ class LifeStore:
             rows=self.conn.execute(
                 """SELECT content_summary FROM interaction_events
                 WHERE user_id=? AND kind='message' AND created_at>? ORDER BY created_at DESC LIMIT ?""",
-                (user_id,time.time()-max(0.0,float(within_days))*86400,limit),
+                (user_id,self.clock()-max(0.0,float(within_days))*86400,limit),
             ).fetchall()
             return [str(row[0]) for row in reversed(rows) if str(row[0]).strip()]
 
@@ -989,13 +991,13 @@ class LifeStore:
                 rows=conn.execute("SELECT id,summary,created_at FROM rest_backlogs WHERE user_id=? AND consumed=0 ORDER BY created_at LIMIT 5",(user_id,)).fetchall()
                 if rows:
                     conn.executemany("UPDATE rest_backlogs SET consumed=1 WHERE id=?",[(r[0],) for r in rows])
-                now=time.time()
+                now=self.clock()
                 return [self._backlog_label(str(r[1]),float(r[2]),now) for r in rows]
 
     async def peek_rest_backlogs(self, user_id: str) -> list[str]:
         async with self._lock:
             rows=self.conn.execute("SELECT summary,created_at FROM rest_backlogs WHERE user_id=? AND consumed=0 ORDER BY created_at LIMIT 5",(user_id,)).fetchall()
-            now=time.time()
+            now=self.clock()
             return [self._backlog_label(str(r[0]),float(r[1]),now) for r in rows]
 
     # 批量版本使用窗口函数保留“每用户最多 3 条、按创建时间排序”的原有语义。
@@ -1013,7 +1015,7 @@ class LifeStore:
                 ) WHERE rn<=5 ORDER BY user_id""",
                 ids,
             ).fetchall()
-            now=time.time()
+            now=self.clock()
             for row in rows:
                 result[str(row[0])].append(self._backlog_label(str(row[1]),float(row[2]),now))
         return result
@@ -1650,7 +1652,7 @@ class LifeStore:
                 archived_at=CASE WHEN ?='archived' THEN ? ELSE archived_at END WHERE id=?""",
                 (title[:160] or row["title"],summary[:1000] or row["summary"],
                  ("public" if privacy=="public" else "private") if privacy else row["privacy"],
-                 status[:24] or row["status"],now or time.time(),status,now or time.time(),document_id),
+                 status[:24] or row["status"],now or self.clock(),status,now or self.clock(),document_id),
             )
             self.conn.commit()
 
@@ -1786,7 +1788,8 @@ class LifeStore:
             return {key:int(row[key] or 0) for key in row.keys()} if row else {}
 
     async def cleanup_runtime_records(self, now: float, usage_before: float, *,
-                                      records_before: float = 0) -> None:
+                                      records_before: float = 0, day: str = "",
+                                      records_before_day: str = "") -> None:
         """清理运行态记录；records_before 提供长期记录的保留截止时间，0 表示本轮跳过长期清理。"""
         async with self._lock:
             with self._tx() as conn:
@@ -1802,7 +1805,7 @@ class LifeStore:
                 conn.execute("DELETE FROM recall_events WHERE expires_at<=?",(now,))
                 # 维护清理与 expire_pending 共用同一套过期逻辑（释放机会 + 记 planner_no_reply），
                 # 避免维护抢先时重试静默失效；_expire_pending_locked 是同步方法，不会重复取锁。
-                self._expire_pending_locked(conn, now, max(0, 2), "")
+                self._expire_pending_locked(conn, now, max(0, 2), day)
                 conn.execute("DELETE FROM llm_usage_events WHERE created_at<?",(usage_before,))
                 conn.execute("DELETE FROM group_observations WHERE expires_at<=?",(now,))
                 conn.execute("UPDATE relay_candidates SET status='expired' WHERE expires_at<=? AND status IN ('pending','sending','queued')",(now,))
@@ -1824,8 +1827,8 @@ class LifeStore:
                         (records_before,),
                     )
                     conn.execute("DELETE FROM relay_events WHERE created_at<?",(records_before,))
-                    # day 是 YYYY-MM-DD 文本，按本地日期换算截止日即可（偏移至多一天）。
-                    day_cut=time.strftime("%Y-%m-%d",time.localtime(records_before))
+                    # 日期由调用方按配置时区传入；未传时兼容旧调用方。
+                    day_cut=records_before_day or time.strftime("%Y-%m-%d",time.localtime(records_before))
                     conn.execute("DELETE FROM proactive_skip_stats WHERE day<?",(day_cut,))
                     # 心情事件与状态快照是动力学分析数据源，保留期比运行记录更长。
                     history_before=now-STATE_HISTORY_RETENTION_DAYS*86400
@@ -2084,7 +2087,7 @@ class LifeStore:
             self.conn.execute(
                 "DELETE FROM date_candidates WHERE status='pending' AND created_at<?",(before,)
             )
-            self.conn.execute("UPDATE memory_runtime SET last_cleanup_at=? WHERE id=1",(time.time(),))
+            self.conn.execute("UPDATE memory_runtime SET last_cleanup_at=? WHERE id=1",(self.clock(),))
             self.conn.commit()
 
     async def upsert_news_item(self, item: dict[str, Any]) -> bool:
@@ -2382,7 +2385,7 @@ class LifeStore:
                     temperature=max(floor,min(cap,current_temperature+delta))
                     conn.execute("UPDATE users SET temperature=?,last_relation_day=? WHERE user_id=?",(temperature,day,user["user_id"]))
 
-    async def first_interaction_day(self, user_id: str) -> str:
+    async def first_interaction_day(self, user_id: str, tzinfo: Any = None) -> str:
         """该用户最早一条互动所在的自然日（YYYY-MM-DD）；无互动返回空串。
 
         供关系补算回看到建档/首次互动日，避免新用户前几天的增益永久丢失。
@@ -2396,7 +2399,7 @@ class LifeStore:
             ).fetchone()
             if not row or not row[0]:
                 return ""
-            return time.strftime("%Y-%m-%d", time.localtime(float(row[0])))
+            return datetime.fromtimestamp(float(row[0]),tz=tzinfo).date().isoformat()
 
     async def get_weather(self) -> dict[str, Any]:
         async with self._lock:

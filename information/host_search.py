@@ -59,7 +59,7 @@ class HostSearchService:
         web=self._web()
         attempts=max(1,int(getattr(self.config.network,"max_attempts",3) or 3))
         limit=max(1,min(20,int(max_results or 5)))
-        started=time.perf_counter(); now=time.time(); last_error="host_unavailable"
+        started=time.perf_counter(); now=self.store.clock(); last_error="host_unavailable"
         if web is not None:
             for attempt in range(attempts):
                 try:

@@ -4,16 +4,19 @@ from __future__ import annotations
 import inspect
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 class LLMService:
     """只接受 MaiBot 的任务路由名，不直接保存 Provider 凭据。"""
 
-    def __init__(self, ctx: Any, config: Any, store: Any | None = None) -> None:
+    def __init__(self, ctx: Any, config: Any, store: Any | None = None, *, now: Any = None) -> None:
         self.ctx = ctx
         self.config = config
         self.store = store
+        self._now = now
         self.available_tasks: set[str] = set()
         self.health_error = "尚未检查"
         self._supports_task_name: bool | None = None
@@ -25,6 +28,12 @@ class LLMService:
 
     def update_config(self, config: Any) -> None:
         self.config = config
+
+    def now(self) -> datetime:
+        if self._now is not None:return self._now()
+        try:tz=ZoneInfo(str(self.config.environment.timezone or "Asia/Shanghai"))
+        except (ZoneInfoNotFoundError,ValueError):tz=timezone(timedelta(hours=8))
+        return datetime.now(tz)
 
     def _generate_call(self, task: str, messages: Any, temperature: float, max_tokens: int | None) -> dict[str, Any]:
         """构造 llm.generate 调用参数，兼容新旧 SDK 的任务路由契约。
@@ -69,7 +78,6 @@ class LLMService:
             # 超时；需要推理质量时用 schedule_task / scene_detail_task 显式覆盖。
             "schedule": models.schedule_task or models.fast_task,
             "scene_detail": models.scene_detail_task or models.fast_task,
-            "rest_wakeup": models.rest_wakeup_task or models.fast_task,
             "continuity": models.continuity_task or models.fast_task,
             "dream": models.dream_task or models.creative_task,
             "diary": models.diary_task or models.creative_task,
@@ -89,7 +97,6 @@ class LLMService:
         """只检查当前启用功能会实际调用的任务，fallback 不因此阻止插件启动。"""
         kinds={"schedule","scene_detail"}
         if self.config.context.enabled and self.config.context.continuity_enabled:kinds.add("continuity")
-        if self.config.rest_gate.enabled and self.config.rest_gate.mode=="llm":kinds.add("rest_wakeup")
         if self.config.memory.enabled:
             kinds.add("dream")
             if self.config.memory.diary_enabled:kinds.add("diary")
@@ -130,7 +137,7 @@ class LLMService:
             return
         try:
             await self.store.record_llm_usage(
-                created_at=time.time(), source="plugin", task_name=task,
+                created_at=self.now().timestamp(), source="plugin", task_name=task,
                 model_name=str(result.get("model") or result.get("model_name") or ""),
                 request_type=request_type,
                 prompt_tokens=int(result.get("prompt_tokens") or 0),
@@ -214,12 +221,7 @@ class LLMService:
 
     def _count_json_failure(self, task_kind: str) -> None:
         """解析失败按「日|任务名」内存计数；日切用配置时区（坑 12：不用 time.localtime）。"""
-        try:
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-            day = datetime.now(ZoneInfo(str(self.config.environment.timezone or "Asia/Shanghai"))).strftime("%Y-%m-%d")
-        except Exception:
-            day = time.strftime("%Y-%m-%d")
+        day = self.now().strftime("%Y-%m-%d")
         if day != self._json_failures_day:
             self._json_failures_day = day; self._json_failures = {}
         task = self.task_for(task_kind)
@@ -236,7 +238,7 @@ class LLMService:
         if not self.store or not self.config.usage.enabled:return
         try:
             await self.store.record_llm_usage(
-                created_at=time.time(),source=source,task_name=task_name,model_name=model_name,
+                created_at=self.now().timestamp(),source=source,task_name=task_name,model_name=model_name,
                 request_type=request_type,prompt_tokens=prompt_tokens,completion_tokens=completion_tokens,
                 total_tokens=total_tokens,latency_ms=0,success=success,error_summary="",
             )

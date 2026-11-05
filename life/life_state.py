@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 import random
-import time
 from datetime import date, datetime
 from typing import Any
 
@@ -193,7 +192,7 @@ class LifeStateEngine:
             try: delta=float(deltas.get(key,0))
             except (TypeError,ValueError): delta=0
             state[key]=self._clamp(float(state.get(key,0))+delta,low,high)
-        state["last_updated_at"]=updated_at or time.time(); await self.store.save_state(state); return state
+        state["last_updated_at"]=updated_at or self.store.clock(); await self.store.save_state(state); return state
 
     # 做梦概率门：每个合格夜晚醒来独立掷一次；两端点短路，不消耗全局随机流
     # （保住 seeded 测试与 generate_dream 内 random.choice 的流位置）。
@@ -244,7 +243,7 @@ class LifeStateEngine:
         raw_fragments=result.get("fragments") if isinstance(result.get("fragments"),list) else []
         fragments=[str(item).strip()[:300] for item in raw_fragments if str(item).strip()][:count]
         mood=str(result.get("mood") or "calm"); mood_delta=0.03 if mood=="warm" else -0.02 if mood=="uneasy" else 0.0
-        now=woke_at.timestamp() if woke_at else time.time()
+        now=woke_at.timestamp() if woke_at else self.store.clock()
         dream_id=await self.store.add_dream(text,mood_delta,0.5,sleep_started_at,fragments,created_at=now)
         # 契机器锚定到入睡时刻 +12h：正常睡眠（<12h）下即 sleep_started_at+12h；
         # 超长睡眠或传入过去时间戳时不生成出生即已过期的契机，顺延到创建时刻 +12h。
@@ -257,10 +256,11 @@ class LifeStateEngine:
         })
         await self.apply_deltas({"mood_valence":mood_delta,"energy":0.5},updated_at=now)
 
-    # 被用户叫醒后设置清醒宽限，避免每条消息反复判醒。
+    # 清醒宽限只维护生活状态，不影响消息回复概率。
     async def mark_woken(self, now: datetime, reason: str) -> None:
         runtime=await self.store.get_sleep_runtime(); state=await self.store.get_state()
-        runtime["phase"]="woken"; runtime["awake_grace_until"]=now.timestamp()+self.config.rest_gate.awake_grace_minutes*60
+        if str(runtime.get("phase") or "") not in {"falling_asleep","light_sleep","deep_sleep"}:return
+        runtime["phase"]="woken"; runtime["awake_grace_until"]=now.timestamp()+self.config.state.awake_grace_minutes*60
         runtime["woken_count"]=int(runtime.get("woken_count",0))+1; runtime["last_event"]=reason
         state["sleep_phase"]="woken"; state["energy"]=self._clamp(float(state.get("energy",70))-3,0,100); state["last_updated_at"]=now.timestamp()
         await self.store.save_sleep_runtime(runtime); await self.store.save_state(state)

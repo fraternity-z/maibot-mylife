@@ -3,7 +3,7 @@
   "id": "fraternity-z.mai-mylife",
   "name": "麦日常",
   "version": "1.0.0",
-  "description": "让麦麦拥有持续生活、消息体验、低频联网见闻以及自己的书柜与创作",
+  "description": "持续生活模拟、日程与记忆；联网校时、私聊必回、群聊概率回复和可配置工作时间，支持见闻与书柜创作",
   "author": {
     "name": "fraternity-z",
     "url": "https://github.com/fraternity-z/maibot-mylife"
@@ -17,8 +17,19 @@
     "min_version": "2.7.0",
     "max_version": "2.91.99"
   },
-  "dependencies": [],
-  "plugin_type": "extension",
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "chinese-calendar",
+      "version_spec": ">=1.0,<2"
+    },
+    {
+      "type": "python_package",
+      "name": "lunar-python",
+      "version_spec": ">=1.4,<2"
+    }
+  ],
+  "plugin_type": "chat",
   "capabilities": [
     "send.text",
     "send.image",
@@ -46,7 +57,8 @@
   "urls": {
     "repository": "https://github.com/fraternity-z/maibot-mylife",
     "homepage": "https://github.com/fraternity-z/maibot-mylife",
-    "documentation": "https://docs.mai-mai.org"
+    "documentation": "https://github.com/fraternity-z/maibot-mylife#readme",
+    "issues": "https://github.com/fraternity-z/maibot-mylife/issues"
   },
   "display": {
     "icon": {

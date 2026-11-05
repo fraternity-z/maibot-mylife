@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 from typing import Any
+from .rest_gate import RestGate
 
 
 class ProactiveEngine:
@@ -40,6 +41,8 @@ class ProactiveEngine:
         cfg=self.config.proactive
         # 自然日按配置时区计算并贯穿全部跳过统计，避免服务器时区不同导致落错日期桶。
         current=now.strftime("%H:%M"); day=now.strftime("%Y-%m-%d")
+        reply=self.config.rest_gate
+        if reply.enabled and not RestGate.in_work_window(reply.work_start,reply.work_end,current):return False
         await self.store.expire_pending(
             now.timestamp(),max_retries=int(getattr(cfg,"max_retries_per_opportunity",2) or 0),day=day,
         )

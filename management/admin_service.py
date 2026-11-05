@@ -119,7 +119,7 @@ class AdminService:
             else:
                 lines=["最近本地搜索历史（查询词已隐私清洗）"]
                 for item in data["items"]:
-                    when=datetime.fromtimestamp(float(item["created_at"])).strftime("%m-%d %H:%M")
+                    when=datetime.fromtimestamp(float(item["created_at"]),tz=now.tzinfo).strftime("%m-%d %H:%M")
                     status="成功" if item["success"] else f"失败({item['error_class'] or '未知'})"
                     results=item.get("results") if isinstance(item.get("results"),list) else []
                     first_title=str((results[0] if results and isinstance(results[0],dict) else {}).get("title") or "")

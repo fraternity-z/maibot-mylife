@@ -475,7 +475,7 @@
   <section class="ml-card" id="sec-config">
     <div class="ml-card-header">
       <h2 class="ml-card-title">全量只读配置透视 (13 个配置节)</h2>
-      <input type="search" class="ml-input" id="cfg-search-input" placeholder="搜索配置节或参数名（如 gate_mode / prompt_max_chars / 阈值）…"/>
+      <input type="search" class="ml-input" id="cfg-search-input" placeholder="搜索配置节或参数名（如 reply_probability / work_start / 概率）…"/>
     </div>
     <div class="ml-cfg-grid" id="cfg-cards-grid">
       <div class="ml-empty">正在读取配置摘要…</div>
@@ -498,8 +498,8 @@
     models: { title: '模型任务路由 (models)', badge: 'LLM' },
     environment: { title: '环境与天气 (environment)', badge: '感知' },
     context: { title: '上下文注入与连续性 (context)', badge: '管线' },
-    rest_gate: { title: '私聊休息闸门 (rest_gate)', badge: '守门' },
-    group: { title: '群聊观察与闸门 (group)', badge: '群聊' },
+    rest_gate: { title: '私聊工作时间 (rest_gate)', badge: '回复' },
+    group: { title: '群聊回复与观察 (group)', badge: '群聊' },
     memory: { title: '记忆：梦境/日记/日期 (memory)', badge: '记忆' },
     network: { title: '联网见闻与搜索 (network)', badge: '联网' },
     creation: { title: '书柜与自主创作 (creation)', badge: '创作' },
@@ -525,19 +525,12 @@
     turn_expire_seconds: '轮次过期秒数',
     background_cache_minutes: '背景缓存分钟',
     replyer_detail: 'Replyer 注入详略',
-    mode: '拦截模式 (mode)',
-    gate_mode: '闸门生效判据 (gate_mode)',
-    wake_probability: '随机被吵醒概率',
-    llm_threshold: '急事判醒字数阈值',
-    awake_grace_minutes: '被叫醒宽限期(分)',
-    silence_minutes: '晚安后静默时长(分)',
-    night_window: '夜间休息时间窗',
-    nap_window: '午休时间窗',
+    reply_probability: '回复概率（0～1）',
+    work_start: '工作开始时间',
+    work_end: '工作结束时间',
     profiles: '已配置群数量',
-    gate_enabled: '群休息闸门开关',
-    gate_scope: '群闸门作用范围',
+    gate_enabled: '群聊概率回复开关',
     turn_enabled: '群轮次注入开关',
-    gate_segment_types: '命中闸门的日程段',
     relay_enabled: '群聊转述开关',
     observation_wait_seconds: '群观察聚合等待(秒)',
     max_buffer_messages: '群缓冲最大消息数',
@@ -730,18 +723,16 @@
     const rg = cfg.rest_gate || {};
     const gp = cfg.group || {};
 
-    const isScheduleGate = rg.gate_mode === 'schedule';
-
     document.getElementById('diag-callouts').innerHTML = `
-      <div class="ml-diag-card ${isScheduleGate ? 'warn' : ''}">
+      <div class="ml-diag-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <strong style="font-size:13.5px;">休息闸门判据诊断 (gate_mode)</strong>
-          <span class="ml-badge ${isScheduleGate ? 'ml-badge-warn' : 'ml-badge-good'}">私聊: ${esc(rg.gate_mode || '—')} / 群: ${esc(gp.gate_mode || '—')}</span>
+          <strong style="font-size:13.5px;">工作时间与回复概率</strong>
+          <span class="ml-badge ml-badge-good">${esc((cfg.environment || {}).timezone || 'Asia/Shanghai')}</span>
         </div>
         <div style="font-size:12px;color:var(--ml-muted);line-height:1.5;">
-          ${isScheduleGate
-            ? '当前私聊闸门为 <code>schedule</code> 模式：只要日程段命中休息类型即生效拦截，<strong>配置的夜窗/午休时间窗 (' + esc(rg.night_window) + ') 将被忽略</strong>。'
-            : '当前私聊闸门为 <code>time_window</code> 模式：严格按夜窗 (' + esc(rg.night_window) + ') 与午休窗 (' + esc(rg.nap_window) + ') 判定。'}
+          私聊：${esc(rg.work_start)}–${esc(rg.work_end)}，时段内必回；
+          群聊：${esc(gp.work_start)}–${esc(gp.work_end)}，概率 ${esc(gp.reply_probability)}。
+          起止相同表示全天，支持跨午夜。群聊每条消息独立抽取一次，关键词和睡眠状态不改变回复策略。
         </div>
       </div>
     `;

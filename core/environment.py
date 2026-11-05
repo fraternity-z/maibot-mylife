@@ -14,6 +14,7 @@ import asyncio
 import time
 
 from ..information.http_client import HttpClient
+from .network_clock import NetworkClock
 
 try:
     import chinese_calendar as _china_calendar
@@ -54,6 +55,7 @@ class EnvironmentService:
         self.config = config
         self.logger = logger
         self.http = http or HttpClient(logger)
+        self.clock = NetworkClock(logger, self.http)
         self._resolved_city_key = ""
         self._resolved_location_name = ""
         self._resolved_latitude: float | None = None
@@ -83,15 +85,20 @@ class EnvironmentService:
         self._resolved_longitude = None
 
     def now(self) -> datetime:
-        """返回配置时区的当前时间；系统缺少 tzdata 时回退到 UTC+8。"""
+        """读取联网校准时间并转换到配置时区，不依赖服务器本地时区。"""
         try:
-            return datetime.now(ZoneInfo(self.config.environment.timezone))
+            tz = ZoneInfo(self.config.environment.timezone)
         except Exception:
             # 静默回退会让“时间差 8 小时”难以定位；只告警一次，之后仍保持可用。
             if not self._tz_warned:
                 self._tz_warned=True
                 self.logger.warning("[MaiLife] 时区数据缺失，回退 UTC+8（建议安装 tzdata）")
-            return datetime.now(timezone(timedelta(hours=8)))
+            tz = timezone(timedelta(hours=8))
+        return datetime.fromtimestamp(self.clock.timestamp(), tz)
+
+    async def refresh_time(self, force: bool = False) -> bool:
+        """供启动与后台维护调用；失败时保留上次校准结果。"""
+        return await self.clock.refresh(force=force)
 
     async def _resolve_city(self, city: str) -> tuple[str, float, float]:
         """把城市名解析为坐标，并在 Runner 生命周期内复用结果。"""
@@ -148,7 +155,7 @@ class EnvironmentService:
         if (
             not force
             and cached
-            and time.time() - float(cached.get("fetched_at", 0)) < refresh_seconds
+            and 0 <= self.clock.timestamp() - float(cached.get("fetched_at", 0)) < refresh_seconds
         ):
             return cached
 
@@ -176,7 +183,7 @@ class EnvironmentService:
             current = raw.get("current") or {}
             code = int(current.get("weather_code", -1))
             data = {
-                "fetched_at": time.time(),
+                "fetched_at": self.clock.timestamp(),
                 "location_name": location_name,
                 "latitude": latitude,
                 "longitude": longitude,
@@ -201,7 +208,7 @@ class EnvironmentService:
 
     def _warn_weather_failure(self,exc:Exception)->None:
         """失败告警限流：同原因签名 30 分钟内只记 debug，签名变化或超时才记 warning 并更新状态。"""
-        signature=f"{type(exc).__name__}:{str(exc)[:80]}"; now=time.time()
+        signature=f"{type(exc).__name__}:{str(exc)[:80]}"; now=time.monotonic()
         last_at,last_signature=self._last_weather_warning
         if signature==last_signature and now-last_at<1800:
             self.logger.debug(f"[MaiLife] 天气刷新失败，使用缓存（同原因 30 分钟内重复，已降级）: {exc}")
@@ -293,6 +300,7 @@ class EnvironmentService:
         upcoming=self._upcoming_festival(day)
         return {
             "iso_time":current.isoformat(timespec="seconds"),"timezone":str(self.config.environment.timezone),
+            "time_source":self.clock.source,
             "date":day.isoformat(),"weekday":weekday,"time_period":self._time_period(current.hour),
             "is_workday":is_workday,"day_type":holiday_name or ("工作日" if is_workday else "休息日"),
             "holiday":holiday_name,"lunar":lunar_text,"solar_term":solar_term or "无",

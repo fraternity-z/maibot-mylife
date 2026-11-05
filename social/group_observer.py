@@ -8,6 +8,8 @@ from dataclasses import dataclass,field
 from datetime import datetime
 from typing import Any
 
+from ..life.rest_gate import RestGate
+
 from ..messaging.adapter_compat import adapter_name,group_identity,sender_identity
 from ..messaging.message_pipeline import media_types,plain_text
 
@@ -57,37 +59,10 @@ class GroupObserver:
         return " ".join(item for item in (text,marker) if item).strip()
 
     async def _group_quiet_now(self,now:datetime)->bool:
-        """群静音期判定：跳过观察判定与摘要（夜间无 Planner 消费这些摘要）。
-
-        与群闸门共用「闸门生效方式」：按日程判断=当前段型命中群列表即静音；
-        按设定时间=群夜间/午休窗内静音。
-        """
-        cfg=getattr(self.config,"group",None)
-        if cfg is None or not getattr(cfg,"gate_enabled",False):return False
-        if str(getattr(cfg,"gate_mode","time_window") or "time_window")=="schedule":
-            kinds=set(getattr(cfg,"gate_segment_types",None) or [])
-            if not kinds:return False
-            nodes=await self.store.get_framework(now.strftime("%Y-%m-%d"))
-            minute=now.hour*60+now.minute
-            for node in nodes:
-                s=int(node.get("start_minute") or 0); e=int(node.get("end_minute") or 0)
-                # 跨午夜段（如 22:30→08:00）与群闸门 _in_window 同规则：s<e 常规区间，否则绕午夜匹配。
-                hit=s<=minute<e if s<e else (minute>=s or minute<e)
-                if hit:
-                    return str(node.get("kind") or "") in kinds
-            return False
-        current=now.strftime("%H:%M")
-        # v1.24.3：窗口受 gate_segment_types 约束——夜窗需含 sleep/rest，午休窗需含 nap；
-        # 段型列表去掉哪类，对应窗口即失效（与群闸门 decide_group 同规则）。
-        kinds=set(getattr(cfg,"gate_segment_types",None) or [])
-        start=str(getattr(cfg,"night_start","22:30")); end=str(getattr(cfg,"night_end","08:00"))
-        nap_start=str(getattr(cfg,"nap_start","12:00")); nap_end=str(getattr(cfg,"nap_end","14:30"))
-        def in_window(a:str,b:str)->bool:
-            if a==b:return False
-            return a<=current<b if a<b else current>=a or current<b
-        window_night=in_window(start,end) and bool(kinds & {"sleep","rest"})
-        window_nap=in_window(nap_start,nap_end) and "nap" in kinds
-        return window_night or window_nap
+        """观察沿用群工作时段，不重复进行概率采样。"""
+        cfg=self.config.group
+        return bool(cfg.gate_enabled and not RestGate.in_work_window(
+            cfg.work_start,cfg.work_end,now.strftime("%H:%M")))
 
     async def observe(self,message:dict[str,Any],now:datetime)->dict[str,Any]:
         """收口一个群话题；较早的并发调用返回 superseded。"""

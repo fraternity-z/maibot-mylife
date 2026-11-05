@@ -25,12 +25,12 @@ from .core.environment import EnvironmentService
 from .core.llm_service import LLMService
 from .core.storage import LifeStore,RECORD_RETENTION_DAYS
 from .information.information_service import InformationService
-from .life.bedtime import BEDTIME_LOOP_SECONDS,BEDTIME_SILENCE_MINUTES,BedtimeManager
+from .life.bedtime import BEDTIME_LOOP_SECONDS,BedtimeManager
 from .life.continuity import ContinuityService
 from .life.life_state import LifeStateEngine
 from .life.memory_service import MemoryService
 from .life.proactive import ProactiveEngine
-from .life.rest_gate import BLOCK_REASON,RestGate
+from .life.rest_gate import RestGate
 from .life.schedule_service import ScheduleService,hhmm
 from .messaging.adapter_compat import adapter_name,component_kind,component_text,group_identity,sender_identity
 from .messaging.command_catalog import build_command_usage_text
@@ -135,12 +135,6 @@ def _toml_dump(data:dict[str,Any])->str:
 def _onoff(value:Any)->str:
     """管理摘要用更短的开/关词，表格与概览行里更紧凑。"""
     return "开" if value else "关"
-
-
-def _time_in_window(start:str,end:str,current:str)->bool:
-    """HH:MM 时间窗判断，支持跨午夜；与睡前流程、休息闸门同一套语义。"""
-    if start==end:return False
-    return start<=current<end if start<end else current>=start or current<end
 
 
 def _countdown(days:int|None)->str:
@@ -252,8 +246,7 @@ class MaiLifePlugin(MaiBotPlugin):
     _EDITABLE_DERIVED:ClassVar[dict[str,frozenset[str]]]={
         "plugin":frozenset({"version"}),
         "users":frozenset({"configured","enabled"}),
-        "rest_gate":frozenset({"night_window","nap_window","silence_minutes"}),
-        "group":frozenset({"profiles","night_window","nap_window","gate_segment_types"}),
+        "group":frozenset({"profiles"}),
         "memory":frozenset({"date_reminder_lead_days"}),
         "creation":frozenset({"continuation_work_types"}),
     }
@@ -288,6 +281,8 @@ class MaiLifePlugin(MaiBotPlugin):
         self._group_turns:dict[tuple[str,str],dict[str,Any]]={}
         self._group_sessions:set[str]=set()
         self._reply_confirmations:dict[tuple[str,str],dict[str,Any]]={}
+        # 发送确认会被首段消费；工作时段归属保留到整轮分段结束（最多一天）。
+        self._reply_origins:dict[tuple[str,str],tuple[bool,float]]={}
         self._active_tasks=ActiveTaskRegistry()
         self._stopping=False; self._reloading=False
 
@@ -297,6 +292,15 @@ class MaiLifePlugin(MaiBotPlugin):
                     self._continuity,self._memory,self._information,
                     self._group_observer,self._relay,self._bookshelf,self._creation,self._admin,
                     self._bedtime))
+
+    def _now_ts(self)->float:
+        return self._env.now().timestamp() if self._env else time.time()
+
+    def _clock_prompt(self)->str:
+        if not self._env:return ""
+        now=self._env.now()
+        return (f"\n【当前时间基准】{now.isoformat(timespec='seconds')}（{self.config.environment.timezone}）。"
+                "涉及今天、日期、几点及日程时统一使用此时间；其他上下文中的服务器本地当前时间不作为依据。\n")
 
     def get_components(self)->list[dict[str,Any]]:
         """组件聊天作用域：mai_life_get_schedule 仅群聊（群轮次不注入私聊背景，日程靠工具补齐）。
@@ -338,11 +342,13 @@ class MaiLifePlugin(MaiBotPlugin):
         root=os.path.dirname(os.path.abspath(__file__))
         self._store=LifeStore(self._resolve_data_dir(root),journal_mode="delete",
                               logger=getattr(self.ctx,"logger",None))
-        await self._store.initialize()
-        await self._store.recover_creation_claims(time.time())
         # 服务共享同一 Store 和强类型配置；LLM 路由先于所有会调用模型的服务创建。
-        self._llm=LLMService(self.ctx,self.config,self._store)
         self._env=EnvironmentService(self._store,self.config,self.ctx.logger)
+        await self._env.refresh_time()
+        self._store.clock=self._env.clock.timestamp
+        await self._store.initialize()
+        self._llm=LLMService(self.ctx,self.config,self._store,now=self._env.now)
+        await self._store.recover_creation_claims(self._env.now().timestamp())
         self._state=LifeStateEngine(self._store,self.config,self._llm,self.ctx.logger,bot_name=self._bot_name)
         self._schedule=ScheduleService(self._store,self.config,self._llm,root,self.ctx.logger,bot_name=self._bot_name)
         self._rest=RestGate(self._store,self.config,self._llm,self._state,self.ctx.logger,bot_name=self._bot_name)
@@ -351,7 +357,8 @@ class MaiLifePlugin(MaiBotPlugin):
         self._memory=MemoryService(self._store,self.config,self._llm,self.ctx.logger,bot_name=self._bot_name)
         self._information=InformationService(self.ctx,self._store,self.config,self._llm,self.ctx.logger,bot_name=self._bot_name)
         self._group_observer=GroupObserver(self._store,self.config,self._llm,self.ctx.logger)
-        self._relay=RelayService(self.ctx,self._store,self.config,self.ctx.logger,bot_name=self._bot_name)
+        self._relay=RelayService(self.ctx,self._store,self.config,self.ctx.logger,bot_name=self._bot_name,
+                                 clock=self._env.clock.timestamp)
         self._bookshelf=BookshelfService(self._store,self.config)
         self._creation=CreationService(self.ctx,self._store,self.config,self._llm,self.ctx.logger,bot_name=self._bot_name)
         self._admin=AdminService(self._store,self.config)
@@ -374,6 +381,7 @@ class MaiLifePlugin(MaiBotPlugin):
         self._session_runtime.clear(); self._group_turns.clear()
         self._group_sessions.clear()
         self._reply_confirmations.clear()
+        self._reply_origins.clear()
         if self._store:await self._store.close()
         self._command_replies=None
         self.ctx.logger.info("[MaiLife] 麦日常已卸载")
@@ -392,7 +400,6 @@ class MaiLifePlugin(MaiBotPlugin):
         # 配置保存不得清空主动/转述任务注册表：WebUI 每次保存都重置会让进行中的任务失去归因。
         self._active_tasks.update_retention(int(self.config.context.turn_expire_seconds))
         self._reply_confirmations.clear(); self._group_turns.clear()
-        self._group_sessions.clear()
         if self._group_observer:await self._group_observer.reset()
         # 热更新按 scope 分发到各服务：只有 self 会替换插件配置实例，此时才全量下发；
         # bot 只重载人格，model 只刷新模型健康，其他服务继续持有同一个已校验实例。
@@ -441,16 +448,23 @@ class MaiLifePlugin(MaiBotPlugin):
         if tasks:await asyncio.gather(*tasks,return_exceptions=True)
 
     async def _daily_generation_loop(self)->None:
+        assert self._env and self._schedule and self._memory
+        initial=self._env.now()
+        # 启动维护已保证当天框架；过点启动不再立即强制重生成。
+        completed={initial.date()} if initial.hour>=self.config.schedule.generate_hour else set()
         while True:
             try:
-                assert self._env and self._schedule and self._memory
-                now=self._env.now(); next_run=now.replace(hour=self.config.schedule.generate_hour,minute=0,second=0,microsecond=0)
-                if next_run<=now:next_run+=timedelta(days=1)
-                await asyncio.sleep(max(1,(next_run-now).total_seconds()))
+                # 联网校准可能修正数小时，不能沿用校准前算出的整日等待。
+                await asyncio.sleep(60)
+                current=self._env.now()
+                if current.hour<self.config.schedule.generate_hour or current.date() in completed:continue
                 weather=await self._env.refresh_weather()
-                current=self._env.now(); memory_context=await self._memory.schedule_context(current)
+                current=self._env.now()
+                if current.hour<self.config.schedule.generate_hour or current.date() in completed:continue
+                memory_context=await self._memory.schedule_context(current)
                 await self._schedule.ensure_day(current,self._personality,self._env.weather_text(weather),force=True,
                                                 memory_context=memory_context,environment=self._env.snapshot(current))
+                completed.add(current.date())
             except asyncio.CancelledError:raise
             except Exception as exc:self.ctx.logger.error(f"[MaiLife] 每日日程生成异常: {exc}")
 
@@ -466,6 +480,7 @@ class MaiLifePlugin(MaiBotPlugin):
             try:
                 # defer 必须新鲜：10 分钟维护 tick 会在静默刚达标时误拦仍在进行的对话。
                 await asyncio.sleep(BEDTIME_LOOP_SECONDS)
+                if self._env:await self._env.refresh_time()
                 if self._bedtime and self._env:await self._bedtime.tick(self._env.now())
             except asyncio.CancelledError:raise
             except Exception as exc:self.ctx.logger.error(f"[MaiLife] 睡前流程异常: {exc}")
@@ -513,6 +528,7 @@ class MaiLifePlugin(MaiBotPlugin):
         if not self._ready:return
         async with self._maintenance_lock:
             assert self._env and self._schedule and self._store and self._state and self._memory
+            await self._env.refresh_time()
             now=self._env.now(); weather=await self._env.refresh_weather(force=force_weather,allow_network=allow_weather_network)
             memory_context=await self._memory.schedule_context(now)
             nodes=await self._schedule.ensure_day(now,self._personality,self._env.weather_text(weather),memory_context=memory_context,
@@ -533,6 +549,8 @@ class MaiLifePlugin(MaiBotPlugin):
             await self._store.cleanup_runtime_records(
                 now.timestamp(),now.timestamp()-int(self.config.usage.retention_days)*86400,
                 records_before=now.timestamp()-RECORD_RETENTION_DAYS*86400,
+                day=now.date().isoformat(),
+                records_before_day=(now-timedelta(days=RECORD_RETENTION_DAYS)).date().isoformat(),
             )
 
     async def _settle_relationships(self,now:datetime)->None:
@@ -551,7 +569,7 @@ class MaiLifePlugin(MaiBotPlugin):
                 try:
                     starts.append(date.fromisoformat(raw)+timedelta(days=1)); continue
                 except ValueError:pass
-            first=await self._store.first_interaction_day(str(user.get("user_id") or ""))
+            first=await self._store.first_interaction_day(str(user.get("user_id") or ""),now.tzinfo)
             try:starts.append(date.fromisoformat(first))
             except ValueError:starts.append(target)
         current=max(target-timedelta(days=365),min(starts))
@@ -640,11 +658,11 @@ class MaiLifePlugin(MaiBotPlugin):
     async def _relay_for_session(self,session_id:str,task_id:str="")->dict[str,Any]:
         if not self._store or not session_id:return {}
         if task_id:return await self._store.relay_for_task(session_id,task_id)
-        return await self._store.pending_relay_context(session_id,time.time())
+        return await self._store.pending_relay_context(session_id,self._now_ts())
 
     async def _activate_planner_task(self,session_id:str,messages:Any)->ActivePluginTask|None:
         """把 Planner 历史中的虚拟任务映射到数据库记录，兼容 task_id 回写竞态。"""
-        now=time.time(); marker=latest_plugin_task_marker(messages)
+        now=self._now_ts(); marker=latest_plugin_task_marker(messages)
         if not marker:
             # Focus 可让多个群共享 session；没有插件任务标记的群被动轮不能借用旧主动任务。
             if self._has_recent_group_turn(session_id):return None
@@ -702,7 +720,7 @@ class MaiLifePlugin(MaiBotPlugin):
         elif task.kind=="relay":
             record=await self._store.relay_candidate(task.record_id)
             if str(record.get("status") or "") in {"pending","sending"}:
-                await self._store.set_relay_status(task.record_id,"cancelled",time.time(),"new_inbound")
+                await self._store.set_relay_status(task.record_id,"cancelled",self._now_ts(),"new_inbound")
         await self._store.release_reply_turn(task.session_id,task.task_id)
         for key,value in self._reply_confirmations.items():
             if key[0]==task.session_id and value.get("task_id")==task.task_id:value["cancelled"]=True
@@ -750,7 +768,7 @@ class MaiLifePlugin(MaiBotPlugin):
         return {}
 
     def _has_recent_group_turn(self,session_id:str)->bool:
-        expiry=max(30,int(self.config.context.turn_expire_seconds)); now=time.time()
+        expiry=max(30,int(self.config.context.turn_expire_seconds)); now=self._now_ts()
         return any(session==session_id and now-float(item.get("updated_at") or 0)<expiry
                    for (session,_anchor),item in self._group_turns.items())
 
@@ -775,7 +793,7 @@ class MaiLifePlugin(MaiBotPlugin):
 
     @HookHandler("chat.receive.before_process",mode=HookMode.BLOCKING,order=HookOrder.EARLY,timeout_ms=30000)
     async def on_receive(self,**kwargs:Any)->dict[str,Any]:
-        """统一处理群/私聊收口、互动记录和休息闸门。
+        """统一处理群/私聊概率回复、互动记录和工作时间。
 
         入口只负责启停开关与消息归属路由，具体管线由群聊/私聊服务方法承担。
         """
@@ -783,21 +801,17 @@ class MaiLifePlugin(MaiBotPlugin):
         if not message:return {"action":"continue"}
         if self._stopping or self._reloading or not self.config.plugin.enabled or not self._ready:return {"action":"continue"}
         if message.get("is_notify"):
-            # v1.24.6（Issue #5）：群聊贴表情等通知此前直接放行，绕过群闸门——
-            # 深夜群里被贴表情也会吵醒麦麦。现在通知类消息同样接受群闸门判定：
-            # 静默期直接 abort（通知无对话价值），窗外放行。
-            if self._rest and self._ready and not self._stopping:
+            uid,session,mid,private=message_identity(message)
+            if private:
+                allowed,_reason=await self._rest.decide(uid,"",self._env.now(),None,allow_wake=False)
+                enabled=True
+            else:
                 gid,_gname=group_identity(message)
-                if gid:
-                    segment=None
-                    if self._schedule:
-                        try:segment=(await self._schedule.context(self._env.now())).get("current")
-                        except Exception:segment=None
-                    allowed,reason=self._rest.decide_group("",self._env.now(),gid,segment)
-                    if not allowed:
-                        self.ctx.logger.info(f"[MaiLife] 群休息闸门阻断通知 group={gid} reason={reason}")
-                        return {"action":"abort"}
-            return {"action":"continue"}
+                if session:self._group_sessions.add(session)
+                allowed,_reason=self._rest.decide_group("",self._env.now(),gid)
+                enabled=self.config.group.gate_enabled
+            if not allowed:return {"action":"abort"}
+            return self._probability_pass(kwargs,message,enabled)
         uid,session,mid,private=message_identity(message)
         if self._is_unmatched_mai_command(message):
             # 手滑命令不会被 Host 派发给本插件；直接显示菜单并 abort，避免落进 AI 闲聊。
@@ -815,6 +829,21 @@ class MaiLifePlugin(MaiBotPlugin):
         if not private:return await self._process_group_message(kwargs,message,uid,session,mid)
         return await self._process_private_message(kwargs,message,uid,session,mid)
 
+    @staticmethod
+    def _probability_pass(kwargs:dict[str,Any],message:dict[str,Any],enabled:bool)->dict[str,Any]:
+        """概率命中后使用宿主数值提升接口，避免群聊再经过动态触发判断。"""
+        if enabled:
+            message=dict(message)
+            raw_info=message.get("message_info")
+            info=dict(raw_info) if isinstance(raw_info,dict) else {}
+            raw_additional=info.get("additional_config")
+            additional=dict(raw_additional) if isinstance(raw_additional,dict) else {}
+            # 宿主把 float 1.0 解释为强制调度；bool True 仍依赖提及配置。
+            additional["is_mentioned"]=1.0
+            info["additional_config"]=additional; message["message_info"]=info
+        kwargs["message"]=message
+        return {"action":"continue","modified_kwargs":kwargs}
+
     async def _process_group_message(self,kwargs:dict[str,Any],message:dict[str,Any],uid:str,session:str,mid:str)->dict[str,Any]:
         """群聊管线：目录登记、群轮次登记和后台公共话题观察（不注入私聊关系或生活隐私）。"""
         if session:self._group_sessions.add(session)
@@ -828,23 +857,17 @@ class MaiLifePlugin(MaiBotPlugin):
         group_id,group_name=group_identity(merged)
         if group_id:
             await self._store.upsert_group_directory(group_id,group_name,session,self._env.now().timestamp())
-        # 群休息闸门（轻量版）：在群轮次登记与观察之前判定；被阻断的消息不进主程序，
-        # 因此不产生 Planner/Replyer/VLM 等主程序模型请求，也不留积压与候选。
+        # 每条消息只掷一次概率，不再读取日程、关键词或睡前协商状态。
         if self._rest:
-            # 群闸门与私聊同构：时间窗 OR 配置的日程类型；日程段取当前框架节点
-            # （_schedule 未装配时退化为纯时间窗，与改动前一致）。
-            group_segment=None
-            if self._schedule:
-                group_segment=(await self._schedule.context(self._env.now())).get("current")
             group_allowed,group_reason=self._rest.decide_group(
-                direct_text(merged),self._env.now(),group_id,group_segment)
+                direct_text(merged),self._env.now(),group_id)
             if not group_allowed:
-                self.ctx.logger.info(f"[MaiLife] 群休息闸门阻断 group={group_id or session} user={uid} reason={group_reason}")
+                self.ctx.logger.debug(f"[MaiLife] 群聊未触发 group={group_id or session} reason={group_reason}")
                 return {"action":"abort"}
         if self.config.group.turn_enabled:
             turn_scope=self._group_scope(merged)
             await self._cancel_group_confirmations(turn_scope)
-            expiry=max(30,int(self.config.context.turn_expire_seconds)); current=time.time()
+            expiry=max(30,int(self.config.context.turn_expire_seconds)); current=self._now_ts()
             self._group_turns={key:value for key,value in self._group_turns.items()
                                if current-float(value.get("updated_at") or 0)<expiry}
             self._group_turns[(session,mid)]={
@@ -854,33 +877,24 @@ class MaiLifePlugin(MaiBotPlugin):
         if self._group_observer and self.config.group.relay_enabled:
             # 社交观察消费防抖后的最终消息，同时保留自己的后台话题收集窗口。
             self._spawn_transient(self._group_observer.observe(merged,self._env.now()),f"mai-life-group-{mid}")
-        kwargs["message"]=merged
         self.ctx.logger.debug(f"[MaiLife] 群聊消息放行 scope={self._group_scope(merged)} media={media_types(merged)}")
-        return {"action":"continue","modified_kwargs":kwargs}
+        return self._probability_pass(kwargs,merged,self.config.group.gate_enabled)
 
     async def _process_private_message(self,kwargs:dict[str,Any],message:dict[str,Any],uid:str,session:str,mid:str)->dict[str,Any]:
-        """私聊管线：建立本轮运行态、互动记录与休息闸门。"""
+        """私聊先判断工作时间与概率，再维护通过本轮的互动与运行态。"""
         # 运行态（意图/媒介/消息 ID）只对真正进入主链的消息写入；
         # 被闸门阻断/命令/未配置用户的消息不写，避免覆写上一轮的待发送归因。
-        media_hint:list[str]|None=None
-        if session:
-            initial_text=direct_text(message); initial_media=media_types(message); media_hint=initial_media
         if not uid or is_command(message):return {"action":"continue"}
         user=await self._store.get_user(uid)
+        text=direct_text(message); media=media_types(message); now=self._env.now()
+        allowed,reason=await self._rest.decide(
+            uid,text,now,None,session_id=session,message_id=mid,media=media,
+            allow_wake=bool(user and user.get("enabled")))
+        if not allowed:
+            self.ctx.logger.debug(f"[MaiLife] 私聊未触发 user={uid} reason={reason}")
+            return {"action":"abort"}
         if not user or not user.get("enabled"):
-            # v1.24.8：未配置用户同样接受私聊休息闸门，但不写互动/积压/运行态；
-            # 陌生人无唤醒权——唤醒词命中不再直接叫醒，照常走概率/LLM 判定。
-            if self._rest and session:
-                segment=None
-                if self._schedule:
-                    segment=(await self._schedule.context(self._env.now())).get("current")
-                allowed,reason=await self._rest.decide(
-                    uid,initial_text,self._env.now(),segment,
-                    session_id=session,message_id=mid,media=initial_media,allow_wake=False)
-                if not allowed:
-                    self.ctx.logger.info(f"[MaiLife] 休息闸门阻断未配置用户 user={uid} reason={reason}")
-                    return {"action":"abort"}
-            return {"action":"continue"}
+            return self._probability_pass(kwargs,message,True)
         if session and session!=user.get("stream_id"):await self._store.set_user_stream(uid,session)
         _sender_id,sender_name=sender_identity(message)
         if sender_name and sender_name!=str(user.get("display_name") or ""):
@@ -902,31 +916,18 @@ class MaiLifePlugin(MaiBotPlugin):
             self._memory.observe_message(uid,text,self._env.now(),source_message_id=mid),
             f"mai-life-date-{uid}",
         )
-        # 休息闸门最后执行；被阻断消息只写入一次性 backlog，不进入 Planner/Replyer。
-        context=await self._schedule.context(self._env.now())
-        gate_allowed,gate_reason=await self._rest.decide(uid,text,self._env.now(),context.get("current"),session_id=session,message_id=mid,media=media)
-        if not gate_allowed:
-            if gate_reason!=BLOCK_REASON:
-                # 明确勿扰的消息不进 backlog，避免次日回复主动提起用户的勿扰表达。
-                await self._store.add_rest_backlog(
-                    uid,text or f"发送了{','.join(media) or '一条消息'}",
-                    self._env.now().timestamp(),source_message_id=mid,
-                )
-            self.ctx.logger.info(f"[MaiLife] 休息闸门阻断 user={uid} reason={gate_reason}")
-            return {"action":"abort"}
         # 只有真正进入主链的消息才写入运行态、取消上一轮待发送内容并取代旧主动任务归因；
         # 被闸门阻断/命令/未配置用户的消息不写，避免“急事回复被静默丢弃”与醒来提交错归因。
         if session:
             self._session_runtime[session]={"user_id":uid,"message_id":mid,
                                             "intent":intent,"media":media,
                                             "platform":str(merged.get("platform") or "qq"),"adapter":adapter_name(merged),
-                                            "chat_type":"private","updated_at":time.time()}
+                                            "chat_type":"private","updated_at":self._now_ts()}
             await self._cancel_reply_confirmations(session)
-            previous=await self._active_tasks.note_inbound(session,time.time())
+            previous=await self._active_tasks.note_inbound(session,self._now_ts())
             await self._supersede_active_task(previous)
-        kwargs["message"]=merged
         self.ctx.logger.debug(f"[MaiLife] 私聊消息放行 session={session} media={media}")
-        return {"action":"continue","modified_kwargs":kwargs}
+        return self._probability_pass(kwargs,merged,True)
 
     def _is_group_session(self,session_id:str)->bool:
         """会话是否为群聊：来自群消息管线登记或 Focus 共享 session 的群轮次。"""
@@ -1004,7 +1005,7 @@ class MaiLifePlugin(MaiBotPlugin):
             return True
         items.insert(0,{"item_type":"SystemMessageItem",
                         "meta":{"item_id":f"mai-life-{uuid.uuid4().hex}","logical_turn_id":None,
-                                "timestamp":datetime.now().isoformat()},
+                                "timestamp":datetime.now(timezone.utc).isoformat()},
                         "parts":[{"type":"text","text":note}]})
         return True
 
@@ -1055,13 +1056,17 @@ class MaiLifePlugin(MaiBotPlugin):
             suffix+=self._active_tasks.planner_instruction(active,str(runtime.get("message_id") or ""))
         if active and active.kind=="relay" and self._relay and self.config.group.relay_enabled:
             suffix+=await self._relay.prompt_context(session,active.task_id)
+        suffix=self._clock_prompt()+suffix
+        enabled=self.config.group.gate_enabled if self._is_group_session(session) else True
+        if not active and enabled:
+            suffix+="\n【回复选择】本轮已通过回复策略：私聊工作时间内必回，群聊只抽取一次概率。请正常回应最新消息，不再根据关键词、睡眠状态或回复意愿重复决定是否开口。\n"
         if not suffix:return {"action":"continue"}
         return self._inject_planner_context(kwargs,suffix)
 
     @HookHandler("maisaka.planner.after_response",mode=HookMode.OBSERVE)
     async def on_planner_after(self,**kwargs:Any)->None:
         session=str(kwargs.get("session_id") or "")
-        active=await self._active_tasks.current(session,time.time())
+        active=await self._active_tasks.current(session,self._now_ts())
         scoped=bool(await self._user_by_session(session) or active or await self._relay_for_session(session))
         if self.config.plugin.enabled and scoped and self._llm:
             await self._llm.record_observed(source="host_planner",task_name="planner",request_type="planner",
@@ -1075,14 +1080,7 @@ class MaiLifePlugin(MaiBotPlugin):
         session=str(kwargs.get("session_id") or ""); suffix=""
         anchor=str(kwargs.get("reply_message_id") or "")
         group_turn=self._group_turn_for(session,anchor) if self.config.group.turn_enabled else {}
-        active=None if group_turn else await self._active_tasks.current(session,time.time())
-        # v1.24.6：群静默协商期注入睡前收尾提示（bot 还在陪聊时提醒自然收尾）。
-        if group_turn and self._rest:
-            gid=str(group_turn.get("group_id") or "")
-            schedule_mode=str(getattr(self.config.group,"gate_mode","time_window") or "time_window")=="schedule"
-            if gid and self._rest.group_approaching(gid,time.time(),schedule_mode=schedule_mode):
-                suffix+="\n【睡前氛围】夜深了/到休息时间了，群里的话题差不多可以收尾了。"
-                "如果还要回复，简短自然带过并提到自己困了/要去休息，不要展开新话题；不要说是系统提示。\n"
+        active=None if group_turn else await self._active_tasks.current(session,self._now_ts())
         if self.config.context.enabled and not group_turn:
             payload=await self._prompt_payload(session,consume_backlog=True)
             if payload:
@@ -1093,6 +1091,7 @@ class MaiLifePlugin(MaiBotPlugin):
                                              detail=str(self.config.context.replyer_detail))
         if active and active.kind=="relay" and self._relay and self.config.group.relay_enabled:
             suffix+=await self._relay.prompt_context(session,active.task_id)
+        suffix=self._clock_prompt()+suffix
         if not suffix:return {"action":"continue"}
         kwargs["extra_prompt"]=(kwargs.get("extra_prompt") or "")+suffix
         return {"action":"continue","modified_kwargs":kwargs}
@@ -1109,7 +1108,11 @@ class MaiLifePlugin(MaiBotPlugin):
     async def on_replyer_after(self,**kwargs:Any)->dict[str,Any]:
         """发送前收口过期/重复回复，执行朋友边界并建立发送确认记录。"""
         session=str(kwargs.get("session_id") or ""); response=str(kwargs.get("response") or "").strip()
-        anchor=str(kwargs.get("reply_message_id") or ""); now=time.time()
+        anchor=str(kwargs.get("reply_message_id") or ""); now=self._now_ts()
+        if response and session and self.config.plugin.enabled:
+            current=time.monotonic()
+            self._reply_origins={key:value for key,value in self._reply_origins.items() if current-value[1]<86400}
+            self._reply_origins[(session,anchor)]=(self._is_group_session(session),current)
         group_turn=self._group_turn_for(session,anchor) if self.config.group.turn_enabled else {}
         active=None if group_turn else await self._active_tasks.current(session,now)
         task_id=active.task_id if active else anchor
@@ -1190,7 +1193,7 @@ class MaiLifePlugin(MaiBotPlugin):
         turn_reserved=False
         if self.config.context.outbound_turn_guard and turn_anchor and self._store:
             turn_reserved=await self._store.reserve_reply_turn(
-                turn_scope,turn_anchor,time.time(),time.time()+int(self.config.context.turn_expire_seconds),
+                turn_scope,turn_anchor,self._now_ts(),self._now_ts()+int(self.config.context.turn_expire_seconds),
             )
             if not turn_reserved:
                 # Host 主动重试（retry_count>0）意味着上一轮发送/解析失败：释放旧锁让重试通过，
@@ -1199,7 +1202,7 @@ class MaiLifePlugin(MaiBotPlugin):
                 if retry_count>0:
                     await self._store.release_reply_turn(turn_scope,turn_anchor)
                     turn_reserved=await self._store.reserve_reply_turn(
-                        turn_scope,turn_anchor,time.time(),time.time()+int(self.config.context.turn_expire_seconds),
+                        turn_scope,turn_anchor,self._now_ts(),self._now_ts()+int(self.config.context.turn_expire_seconds),
                     )
                     self._get_logger().info(
                         f"[MaiLife] 重试轮释放旧轮次锁 session={session} anchor={turn_anchor} retry={retry_count}")
@@ -1230,17 +1233,26 @@ class MaiLifePlugin(MaiBotPlugin):
         if not message:return {"action":"continue"}
         anchor=str(kwargs.get("reply_message_id") or ""); session=str(message.get("session_id") or "")
         pending_confirmation=self._reply_confirmations.get((session,anchor))
+        def outside_work_hours()->bool:
+            origin=self._reply_origins.get((session,anchor))
+            if not (pending_confirmation or origin) or not self.config.plugin.enabled or not self._env:return False
+            group=bool(group_identity(message)[0] or (origin and origin[0])
+                       or str((pending_confirmation or {}).get("turn_scope") or "").startswith("group:"))
+            cfg=self.config.group if group else self.config.rest_gate
+            enabled=cfg.gate_enabled if group else cfg.enabled
+            return enabled and not RestGate.in_work_window(cfg.work_start,cfg.work_end,self._env.now().strftime("%H:%M"))
+
         def confirmation_cancelled()->bool:
             """新入站消息/新群轮次已取消这轮待发送时，禁止旧回复继续发出。"""
             return bool(pending_confirmation and pending_confirmation.get("cancelled")
                         and self._reply_confirmations.get((session,anchor)) is pending_confirmation)
-        if confirmation_cancelled():
+        if confirmation_cancelled() or outside_work_hours():
             self._reply_confirmations.pop((session,anchor),None)
-            self._get_logger().info(f"[MaiLife] 发送前拦截 reason=confirmation_cancelled session={session} anchor={anchor}")
+            self._get_logger().info(f"[MaiLife] 发送前拦截 reason=cancelled_or_outside_work_hours session={session} anchor={anchor}")
             return {"action":"abort"}
         # 群防抖轮次不借用同 session 下的私聊/主动任务归因。
         active=(None if pending_confirmation and str(pending_confirmation.get("turn_scope") or "").startswith("group:")
-                else await self._active_tasks.current(session,time.time()))
+                else await self._active_tasks.current(session,self._now_ts()))
         task_id=active.task_id if active else anchor
         proactive_task=await self._store.proactive_for_task(session,task_id) if self._store and task_id else {}
         modified=False
@@ -1253,7 +1265,7 @@ class MaiLifePlugin(MaiBotPlugin):
             late_ok=bool(active and str(proactive_task.get("id") or "")==str(active.record_id)
                          and float(proactive_task.get("sent_at") or 0)==0
                          and status in {"pending","expired"})
-            expired=status=="pending" and float(proactive_task.get("expires_at") or 0)<=time.time() and not late_ok
+            expired=status=="pending" and float(proactive_task.get("expires_at") or 0)<=self._now_ts() and not late_ok
             disabled=self._stopping or not self.config.plugin.enabled or not self.config.proactive.enabled
             if expired:await self._store.set_proactive_event_status(str(proactive_task["id"]),"expired")
             elif disabled and status=="pending":
@@ -1270,12 +1282,12 @@ class MaiLifePlugin(MaiBotPlugin):
             kwargs["set_reply"]=False; modified=True
         if relay_task and (self._stopping or not self.config.plugin.enabled or not self.config.group.relay_enabled):
             if str(relay_task.get("status") or "") in {"pending","sending"} and self._store:
-                await self._store.set_relay_status(str(relay_task["id"]),"cancelled",time.time(),"plugin_disabled")
+                await self._store.set_relay_status(str(relay_task["id"]),"cancelled",self._now_ts(),"plugin_disabled")
             self._get_logger().info(f"[MaiLife] 发送前拦截 reason=relay_disabled session={session} task={relay_task.get('id')}")
             return {"action":"abort"}
         if active:
             # 关联 ID 与真实引用 ID 分离：任务状态按 task_id 结算，QQ 引用仍保留 Planner 选择的数字消息号。
-            if not await self._active_tasks.reserve_send(session,active.task_id,anchor,time.time()):
+            if not await self._active_tasks.reserve_send(session,active.task_id,anchor,self._now_ts()):
                 self._get_logger().info(
                     f"[MaiLife] 发送前拦截 reason=send_reserve_failed session={session} task={active.task_id} "
                     f"anchor={anchor} reserved_at={active.reply_anchor or '-'} sent={active.sent}")
@@ -1285,9 +1297,9 @@ class MaiLifePlugin(MaiBotPlugin):
             additional["mai_life_reply_anchor"]=anchor
             kwargs["message"]=message; modified=True
         # 上面的数据库查询存在 await；新入站可能在此期间取消旧轮次，交给适配器前复核一次。
-        if confirmation_cancelled():
+        if confirmation_cancelled() or outside_work_hours():
             self._reply_confirmations.pop((session,anchor),None)
-            self._get_logger().info(f"[MaiLife] 发送前拦截 reason=confirmation_cancelled session={session} anchor={anchor}")
+            self._get_logger().info(f"[MaiLife] 发送前拦截 reason=cancelled_or_outside_work_hours session={session} anchor={anchor}")
             return {"action":"abort"}
         if not self._relay or not self.config.plugin.enabled or not self.config.group.relay_enabled:
             return {"action":"continue","modified_kwargs":kwargs} if modified else {"action":"continue"}
@@ -1297,9 +1309,9 @@ class MaiLifePlugin(MaiBotPlugin):
                         and str(relay_task.get("status") or "") in {"pending","sending","expired"})
         if not relay_late and await self._relay.should_abort_send(message,task_id):return {"action":"abort"}
         mutated,reserved=await self._relay.mutate_before_send(message,task_id,allow_expired=relay_late)
-        if confirmation_cancelled():
+        if confirmation_cancelled() or outside_work_hours():
             self._reply_confirmations.pop((session,anchor),None)
-            self._get_logger().info(f"[MaiLife] 发送前拦截 reason=confirmation_cancelled session={session} anchor={anchor}")
+            self._get_logger().info(f"[MaiLife] 发送前拦截 reason=cancelled_or_outside_work_hours session={session} anchor={anchor}")
             return {"action":"abort"}
         if not reserved:
             return {"action":"continue","modified_kwargs":kwargs} if modified else {"action":"continue"}
@@ -1310,15 +1322,10 @@ class MaiLifePlugin(MaiBotPlugin):
     async def on_send_after(self,**kwargs:Any)->None:
         """以平台实际发送结果提交或释放醒来、轮次锁、主动额度和转述候选。"""
         message=kwargs.get("message") if isinstance(kwargs.get("message"),dict) else {}
-        sent=bool(kwargs.get("sent")); now_ts=time.time()
+        sent=bool(kwargs.get("sent")); now_ts=self._now_ts()
         # 即使发送期间刚好热禁用了社交模块，也必须收口已经进入 sending 的候选。
         if self._relay:await self._relay.confirm_after_send(message,sent)
         session=str(message.get("session_id") or ""); anchor=str(kwargs.get("reply_message_id") or "")
-        # v1.24.6：记录 bot 群发言时刻——群闸门的睡前协商以 bot 是否还在陪聊为基准。
-        if sent and self._rest and session in self._group_sessions:
-            from .messaging.adapter_compat import group_identity as _gid
-            gid,_gname=_gid(message)
-            if gid:self._rest.note_group_bot_send(gid,now_ts)
         info=message.get("message_info") if isinstance(message.get("message_info"),dict) else {}
         additional=info.get("additional_config") if isinstance(info.get("additional_config"),dict) else {}
         tagged_task_id=str(additional.get("mai_life_active_task_id") or "")
@@ -1610,12 +1617,13 @@ class MaiLifePlugin(MaiBotPlugin):
     @Command(name="/麦麦配置",pattern=r"^(?:/麦麦配置|/mai_config)(?=\s|$)",description="查看麦日常配置摘要")
     async def cmd_config(self,**kwargs:Any)->tuple[bool,str,int]:
         if not await self._command_access(kwargs):return await self._send_command(kwargs,PRIVATE_COMMAND_ACCESS_DENIED)
-        group_gate_mode="按设定时间" if self.config.group.gate_mode=="time_window" else "按日程判断"
         text=(f"麦日常：{'开启' if self.config.plugin.enabled else '关闭'}\n"
               f"配置用户：已配置 {len(self.config.users.profiles)} 个（启用 {sum(1 for p in self.config.users.profiles if p.enabled)} 个）\n"
-              f"休息闸门：{('开启（按设定时间）' if self.config.rest_gate.gate_mode=='time_window' else '开启（按日程判断）') if self.config.rest_gate.enabled else '关闭'}\n"
-              f"睡前流程：{('跟随日程睡眠段' if self.config.rest_gate.gate_mode=='schedule' else '与夜间闸门同时段')+'（静默 %d 分钟后入睡）' % BEDTIME_SILENCE_MINUTES if self.config.rest_gate.enabled else '关闭'}\n"
-              f"群休息闸门：{'开启（' + group_gate_mode + '，%d 个群静音）' % sum(1 for g in self.config.group.profiles if g.enabled and g.rest_gate_enabled) if self.config.group.gate_enabled else '关闭'}\n"
+              f"私聊回复：工作时间内必回，时段限制{_switch(self.config.rest_gate.enabled)}，"
+              f"工作时间 {self.config.rest_gate.work_start}-{self.config.rest_gate.work_end}\n"
+              f"群聊概率回复：{_switch(self.config.group.gate_enabled)}，概率 {self.config.group.reply_probability:.0%}，"
+              f"工作时间 {self.config.group.work_start}-{self.config.group.work_end}\n"
+              f"工作时间按 {self.config.environment.timezone}；起止相同表示全天。\n"
               f"生活记忆：{'开启' if self.config.memory.enabled else '关闭'}\n"
               f"联网见闻：{'开启' if self.config.network.enabled else '关闭'}（新闻 {'开' if self.config.network.news_enabled else '关'} / 搜索 {'开' if self.config.network.news_enabled else '关'}）\n"
               f"社交转述：{'开启' if self.config.group.relay_enabled else '关闭'}（白名单群 {len(self.config.group.profiles)}）\n"
@@ -1641,17 +1649,22 @@ class MaiLifePlugin(MaiBotPlugin):
                                               environment=self._env.snapshot(now))
         return await self._send_command(kwargs,f"已重新生成今日日程，共 {len(nodes)} 个节点。")
 
-    @Command(name="/麦麦休息测试",pattern=r"^(?:/麦麦休息测试|/mai_rest_test)(?=\s|$)",description="管理员查看休息闸门状态")
+    @Command(name="/麦麦休息测试",pattern=r"^(?:/麦麦休息测试|/mai_rest_test)(?=\s|$)",description="管理员查看时间与概率回复状态")
     async def cmd_rest_test(self,**kwargs:Any)->tuple[bool,str,int]:
         uid=str(kwargs.get("user_id") or "")
         if not await self._command_access(kwargs) or not await self._is_owner_or_admin(uid):
-            return await self._send_command(kwargs,"只有私聊管理员可以查看休息闸门诊断。"+ADMIN_IDS_HINT)
+            return await self._send_command(kwargs,"只有私聊管理员可以查看回复策略诊断。"+ADMIN_IDS_HINT)
         if not self._ready:return await self._send_command(kwargs,"服务尚未初始化。")
         assert self._env and self._schedule and self._store
         now=self._env.now(); context=await self._schedule.context(now); runtime=await self._store.get_sleep_runtime()
         kind=str((context.get('current') or {}).get('kind') or "无"); phase=str(runtime.get('phase') or "未知")
         grace=runtime.get('awake_grace_until')
-        text=(f"当前时间：{now.strftime('%H:%M')}\n日程类型：{_SCHEDULE_KIND_ZH.get(kind,kind)}\n"
+        private=self.config.rest_gate; group=self.config.group
+        text=(f"当前时间：{now.isoformat(timespec='seconds')}（{self.config.environment.timezone}）\n"
+              f"计时来源：{self._env.clock.source}\n"
+              f"私聊：工作时间内必回 / 时段限制{_switch(private.enabled)} / {private.work_start}-{private.work_end}\n"
+              f"群聊：{_switch(group.gate_enabled)} / {group.reply_probability:.0%} / {group.work_start}-{group.work_end}\n"
+              f"日程类型：{_SCHEDULE_KIND_ZH.get(kind,kind)}\n"
               f"睡眠阶段：{_SLEEP_PHASE_ZH.get(phase,phase)}\n醒来缓冲至："
               f"{datetime.fromtimestamp(float(grace),tz=now.tzinfo).strftime('%H:%M') if grace else '无'}")
         return await self._send_command(kwargs,text)
@@ -1697,20 +1710,9 @@ class MaiLifePlugin(MaiBotPlugin):
                 f"模型健康：{self._llm.health_error or '正常'}\n后台任务：{len(self._tasks)}")
 
     def _sleep_kind_zh(self,phase:str,segment:dict[str,Any],now:Any)->str:
-        """休息闸门的"类型"中译：夜间睡眠/午休/普通休息；未在休息时显式"清醒"。
-
-        日程 kind 命中 gate_segment_types 时用它细化，否则按夜窗/午休窗推断
-        （night→sleep、nap→nap）；只描述生活状态类型，与闸门此刻是否生效无关。
-        """
+        """日程中的休息类型仅描述生活状态，不参与回复选择。"""
         if phase not in _SLEEPING_PHASES:return "清醒"
-        gate=self.config.rest_gate; kind=str(segment.get("kind") or "")
-        if kind not in set(gate.gate_segment_types):
-            if str(getattr(gate,"gate_mode","time_window") or "time_window")!="schedule":
-                current=now.strftime("%H:%M")
-                kind="sleep" if _time_in_window(gate.night_start,gate.night_end,current) else (
-                    "nap" if _time_in_window(gate.nap_start,gate.nap_end,current) else "rest")
-            else:
-                kind=kind or "rest"  # 按日程判断：不按时间窗推断，未细化时按普通休息展示
+        kind=str(segment.get("kind") or "rest")
         return _SCHEDULE_KIND_ZH.get(kind,kind)
 
     @API(name="get_life_state",description="获取麦麦全局生活状态",version="1",public=True)
@@ -2280,21 +2282,12 @@ class MaiLifePlugin(MaiBotPlugin):
                                "turn_expire_seconds":int(cfg.context.turn_expire_seconds),
                                "background_cache_minutes":int(cfg.context.background_cache_minutes),
                                "replyer_detail":str(cfg.context.replyer_detail)},
-                    "rest_gate":{"enabled":_switch(gate.enabled),"mode":str(gate.mode),"gate_mode":str(gate.gate_mode),
-                                 "wake_probability":round(float(gate.wake_probability),2),
-                                 "llm_threshold":int(gate.llm_threshold),
-                                 "awake_grace_minutes":int(gate.awake_grace_minutes),
-                                 "silence_minutes":BEDTIME_SILENCE_MINUTES,
-                                 "night_window":f"{gate.night_start}-{gate.night_end}",
-                                 "nap_window":f"{gate.nap_start}-{gate.nap_end}"},
+                    "rest_gate":{"enabled":_switch(gate.enabled),"work_start":gate.work_start,"work_end":gate.work_end},
                     "group":{"profiles":len(cfg.group.profiles),
                              "gate_enabled":_switch(cfg.group.gate_enabled),
-                             "gate_mode":str(cfg.group.gate_mode),
-                             "gate_scope":str(cfg.group.gate_scope),
+                             "reply_probability":float(cfg.group.reply_probability),
+                             "work_start":cfg.group.work_start,"work_end":cfg.group.work_end,
                              "turn_enabled":_switch(cfg.group.turn_enabled),
-                             "gate_segment_types":"、".join(cfg.group.gate_segment_types),
-                             "night_window":f"{cfg.group.night_start}-{cfg.group.night_end}",
-                             "nap_window":f"{cfg.group.nap_start}-{cfg.group.nap_end}",
                              "relay_enabled":_switch(cfg.group.relay_enabled),
                              "observation_wait_seconds":int(cfg.group.observation_wait_seconds),
                              "max_buffer_messages":int(cfg.group.max_buffer_messages),

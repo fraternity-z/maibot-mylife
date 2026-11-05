@@ -1,7 +1,7 @@
 """Mai_mylife WebUI 配置模型。
 
 所有分组和字段都提供中文标签、中文说明及英文 i18n，避免 WebUI 直接显示
-``user_id``、``wake_probability`` 等内部字段名。
+``user_id``、``work_start`` 等内部字段名。
 """
 from __future__ import annotations
 
@@ -10,10 +10,10 @@ from typing import Any, ClassVar, Literal
 import re
 
 from maibot_sdk import Field, PluginConfigBase
-from pydantic import ValidationInfo, field_validator, model_validator
+from pydantic import field_validator, model_validator
 
 PLUGIN_VERSION = "1.0.0"
-CONFIG_SCHEMA_VERSION = "1.13.0"
+CONFIG_SCHEMA_VERSION = "1.14.0"
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -63,6 +63,27 @@ def _time(value: Any, default: str) -> str:
     """把非法时间恢复为安全默认值。"""
     text = str(value or "").strip()
     return text if _TIME_RE.fullmatch(text) else default
+
+
+def _work_time(value: Any) -> str:
+    text=str(value).strip()
+    if not _TIME_RE.fullmatch(text):raise ValueError("工作时间必须为 HH:MM（00:00～23:59）")
+    return text
+
+
+def _migrate_reply_policy(data: Any, enabled_key: str) -> Any:
+    if not isinstance(data,dict):return data
+    legacy={"mode","gate_mode","gate_scope","gate_segment_types","wake_probability",
+            "force_wake_terms","night_start","night_end","nap_start","nap_end"}
+    if not legacy.intersection(data) or {"reply_probability","work_start","work_end"}.intersection(data):return data
+    migrated=dict(data)
+    if data.get(enabled_key,False):
+        if data.get("gate_mode","time_window")=="time_window":
+            migrated["work_start"]=data.get("night_end","08:00")
+            migrated["work_end"]=data.get("night_start","22:30")
+    # 旧关闭仅表示不限制休息期，不应意外关闭新的回复策略。
+    migrated[enabled_key]=True
+    return migrated
 
 
 class PluginSettings(PluginConfigBase):
@@ -299,12 +320,6 @@ class SocialGroupProfile(PluginConfigBase):
         json_schema_extra=_ui("允许作为转述目标", "启用后主人或管理员可用 /麦麦转述 群QQ号 内容触发该群 Planner。", 3,
                               label_en="Allow Relay Target", hint_en="Allow owner/admin to trigger this group's Planner with the Chinese relay command."),
     )
-    rest_gate_enabled: bool = Field(
-        default=False, description="是否在该群启用夜间静音（休息闸门）。",
-        json_schema_extra=_ui("启用夜间静音", "开启后，在「休息回复闸门→群聊闸门」配置的时间窗内，该群只有含强制唤醒词的消息会被回复，其余静默。需先在总开关启用群聊休息闸门。", 4,
-                              label_en="Enable Group Night Silence", hint_en="During group quiet windows only force-wake terms get replies in this group."),
-    )
-
     @field_validator("group_id", mode="before")
     @classmethod
     def normalize_text(cls, value: Any) -> str:
@@ -434,6 +449,10 @@ class StateSettings(PluginConfigBase):
     __ui_i18n__: ClassVar[dict[str, dict[str, str]]] = {
         "en_US": {"title": "Life State", "description": "Deterministic energy, hunger, health and body-cycle simulation."}
     }
+
+    awake_grace_minutes: int = Field(default=30, ge=0, le=240, description="睡眠中回复后保持清醒的分钟数，仅影响生活模拟。",
+        json_schema_extra=_ui("醒来缓冲（分钟）", "仅控制生活状态；不改变回复概率或工作时段。", 5,
+                              label_en="Awake Grace Period", hint_en="Life simulation only; does not change reply probability or working hours."))
 
     tick_interval_minutes: int = Field(
         default=10, ge=1, le=60,
@@ -623,166 +642,56 @@ class NetworkSettings(PluginConfigBase):
 
 
 class RestGateSettings(PluginConfigBase):
-    """睡眠和午休期间的被动回复判醒设置。"""
+    """私聊工作时段；时段内消息全部放行。"""
 
-    __ui_label__: ClassVar[str] = "休息回复闸门（私聊）"
+    __ui_label__: ClassVar[str] = "私聊回复"
     __ui_order__: ClassVar[int] = 6
     __ui_i18n__: ClassVar[dict[str, dict[str, str]]] = {
-        "en_US": {"title": "Rest Reply Gate", "description": "Decides whether Mai wakes up for passive messages during rest."}
+        "en_US": {"title": "Private Replies", "description": "All private messages pass during working hours."}
     }
 
-    enabled: bool = Field(
-        default=False,
-        description="是否启用睡眠和午休期间的判醒闸门。",
-        json_schema_extra=_ui(
-            "启用休息回复闸门", "默认关闭。开启后，麦麦睡眠或午休时可能暂不回复普通消息。", 0,
-            label_en="Enable Rest Reply Gate", hint_en="When enabled, Mai may remain silent for ordinary messages during sleep or naps.",
-        ),
-    )
-    mode: Literal["probability", "llm"] = Field(
-        default="probability",
-        description="普通消息使用概率还是 LLM 进行判醒。",
-        json_schema_extra=_ui(
-            "判醒模式", "规则会先处理明确勿扰和紧急叫醒；这里只控制剩余普通消息。", 2,
-            label_en="Wake Decision Mode", hint_en="Explicit quiet and urgent wake signals are handled before this mode.",
-            enum_labels={"probability": "规则边界 + 概率", "llm": "LLM 模型判断"},
-        ),
-    )
-    gate_mode: Literal["time_window", "schedule"] = Field(
-        default="time_window", description="闸门生效方式：按设定时间窗，或按日程段型自行判断。",
-        json_schema_extra=_ui(
-            "闸门生效方式", "按设定时间：只在下方夜间/午休时间窗内闸门生效；按日程判断：日程进入「闸门生效的日程类型」所列段型时即生效（跟着日程作息走，如日程 22:30 就寝则 22:30 开始休息，忽略时间窗），晚安与入睡推迟同样跟随日程睡眠段。", 1,
-            label_en="Gate Mode",
-            hint_en="time_window: gate only inside configured windows; schedule: gate whenever the schedule enters listed segment kinds.",
-            enum_labels={"time_window": "按设定时间", "schedule": "按日程判断"},
-        ),
-    )
-    wake_probability: float = Field(
-        default=0.18, ge=0, le=1,
-        description="概率模式下普通消息叫醒麦麦的概率。",
-        json_schema_extra=_ui(
-            "普通消息醒来概率", "0.18 表示 18%。只在 probability 模式下生效。", 3,
-            label_en="Wake Probability", hint_en="0.18 means 18%. Only used in probability mode.",
-        ),
-    )
-    llm_threshold: int = Field(
-        default=70, ge=0, le=100,
-        description="LLM 判醒分数阈值。",
-        json_schema_extra=_ui(
-            "LLM 判醒阈值", "分数达到该值且模型认为应回复时才会醒来。只在 LLM 模式生效。", 4,
-            label_en="LLM Wake Threshold", hint_en="Wake only when the model score reaches this threshold.",
-        ),
-    )
-    awake_grace_minutes: int = Field(
-        default=30, ge=0, le=240,
-        description="被叫醒后免于重复判醒的时间。",
-        json_schema_extra=_ui(
-            "醒来缓冲（分钟）", "缓冲期间普通消息直接放行，避免睡眠段内每条消息都重新判醒。", 5,
-            label_en="Awake Grace Period (min)", hint_en="Messages pass directly during this period without another wake decision.",
-        ),
-    )
-    gate_segment_types: list[Literal["sleep", "nap", "rest"]] = Field(
-        default_factory=lambda: ["sleep", "nap"],
-        description="按日程判断模式下启用闸门的日程类型；按设定时间模式下不参与生效。",
-        json_schema_extra=_ui(
-            "闸门生效的日程类型", "按日程判断模式下：日程进入所列段型时闸门即生效（主力开关，任意时间）；按设定时间模式下：本列表不参与闸门生效，仅用于判醒提示词里的活动描述。加入 rest 后，按日程判断时普通休息段也可能不回复。", 6,
-            label_en="Gated Schedule Types", hint_en="In schedule mode the gate activates on listed segment kinds; in time-window mode this list only labels the wake-judgment prompt.",
-            enum_labels={"sleep": "夜间睡眠（sleep）", "nap": "午休小睡（nap）", "rest": "普通休息（rest）"},
-        ),
-    )
-    force_wake_terms: list[str] = Field(
-        default_factory=lambda: ["救命","急事","报警","醒醒","快醒","叫醒","出事了","很难受","撑不住","危险","轻生","自杀"],
-        description="强制唤醒词：消息含其中任意一词时无视勿扰词与概率，立即放行并建立待醒候选。",
-        json_schema_extra=_ui("强制唤醒词","含任意一词立即放行；可自由增删",7,
-                              label_en="Force Wake Terms",
-                              hint_en="Any term in the message bypasses quiet terms and probability, waking Mai immediately."),
-    )
-    night_start: str = Field(
-        default="22:30", description="夜间闸门开始时间。",
-        json_schema_extra=_ui("夜间闸门开始", "默认 22:30，支持跨午夜；仅在「按设定时间」模式下生效，与结束时间相同则该窗口永不生效。", 8, label_en="Night Gate Start", hint_en="Night gate start in HH:MM format."),
-    )
-    night_end: str = Field(
-        default="08:00", description="夜间闸门结束时间。",
-        json_schema_extra=_ui("夜间闸门结束", "默认 08:00。", 9, label_en="Night Gate End", hint_en="Night gate end in HH:MM format."),
-    )
-    nap_start: str = Field(
-        default="12:00", description="午休闸门开始时间。",
-        json_schema_extra=_ui("午休闸门开始", "默认 12:00。仅在「按设定时间」模式下生效。", 10, label_en="Nap Gate Start", hint_en="Nap gate start in HH:MM format."),
-    )
-    nap_end: str = Field(
-        default="14:30", description="午休闸门结束时间。",
-        json_schema_extra=_ui("午休闸门结束", "默认 14:30。", 11, label_en="Nap Gate End", hint_en="Nap gate end in HH:MM format."),
-    )
+    enabled: bool = Field(default=True, description="是否启用私聊工作时段限制。",
+        json_schema_extra=_ui("限制私聊工作时间", "关闭后私聊全天放行；开启后工作时间内必回。命令始终不受限制。", 0,
+                              label_en="Limit Private Working Hours", hint_en="When disabled, private messages always pass. Commands are exempt."))
+    work_start: str = Field(default="00:00", description="私聊工作开始时间。",
+        json_schema_extra=_ui("私聊工作开始", "HH:MM，按环境时区；支持跨午夜，与结束相同表示全天。", 2,
+                              label_en="Private Work Start", hint_en="HH:MM in the configured timezone; equal endpoints mean all day."))
+    work_end: str = Field(default="00:00", description="私聊工作结束时间。",
+        json_schema_extra=_ui("私聊工作结束", "到此时刻停止放行普通消息；命令不受影响。", 3,
+                              label_en="Private Work End", hint_en="Ordinary messages stop being admitted at this time."))
 
-    # v1.24.0：群聊闸门字段迁移到 GroupChatSettings（[group] 节）。
-
-    @field_validator("night_start", "night_end", "nap_start", "nap_end", mode="before")
+    @field_validator("work_start", "work_end", mode="before")
     @classmethod
-    def validate_gate_time(cls, value: Any, info: ValidationInfo) -> str:
-        defaults={"night_start":"22:30","night_end":"08:00","nap_start":"12:00","nap_end":"14:30"}
-        return _time(value,defaults.get(info.field_name,"00:00"))
+    def validate_work_time(cls, value: Any) -> str:
+        return _work_time(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_reply_policy(cls, data: Any) -> Any:
+        return _migrate_reply_policy(data, "enabled")
 
 
 class GroupChatSettings(PluginConfigBase):
-    """群聊集中设置：白名单、休息闸门与轮次注册、观察与转述（原社交转述并入）。"""
+    """群聊集中设置：工作时段、回复概率、轮次注册、观察与转述。"""
 
     __ui_label__: ClassVar[str] = "群聊设置"
     __ui_order__: ClassVar[int] = 2
 
     profiles: list[SocialGroupProfile] = Field(default_factory=list,description="QQ群白名单。",
-        json_schema_extra=_ui("群聊白名单","逐群开关：启用 / 观察 / 转述 / 夜间静音；只填真实 QQ 群号，群名由 MaiBot 会话自动读取。",0,
+        json_schema_extra=_ui("群聊白名单","逐群开关：启用 / 观察 / 转述；只填真实 QQ 群号，群名由 MaiBot 会话自动读取。回复策略作用于所有群。",0,
                               label_en="Group Allowlist",hint_en="Controls observation sources and explicit relay targets."))
-    gate_enabled: bool = Field(
-        default=False, description="群聊休息闸门总开关。",
-        json_schema_extra=_ui("启用群聊休息闸门", "默认关闭。开启后，在群时间窗（按设定时间）或日程段型（按日程判断）期间，群里只有含强制唤醒词的消息会被回复，其余静默。", 1,
-                              label_en="Enable Group Rest Gate", hint_en="During group quiet windows only force-wake terms get replies."),
-    )
-    gate_mode: Literal["time_window", "schedule"] = Field(
-        default="time_window", description="群闸门生效方式：按设定时间=只认群夜窗/群午休窗；按日程判断=日程段型命中即生效（任意时间）。",
-        json_schema_extra=_ui("群闸门生效方式", "与私聊闸门的生效方式相互独立，可分别选择。按设定时间：只在群夜间/午休时间窗内生效（窗口仍受下方日程类型列表约束：夜窗需含 sleep/rest、午休窗需含 nap）；按日程判断：日程进入所列段型时即生效，忽略时间窗，跟着日程作息走。", 2,
-                              label_en="Group Gate Mode",
-                              hint_en="time_window: group windows only; schedule: gate on listed segment kinds. Independent from the private gate mode.",
-                              enum_labels={"time_window": "按设定时间", "schedule": "按日程判断"}),
-    )
-    gate_scope: Literal["all", "selected"] = Field(
-        default="all", description="群闸门作用范围：all=所有群；selected=只对群聊白名单中开了「夜间静音」的群生效。",
-        json_schema_extra=_ui("群闸门作用范围", "「所有群」开箱即用；「指定群」需先在上方白名单登记该群并打开「夜间静音」。", 3,
-                              label_en="Group Gate Scope", hint_en="All groups, or only selected allowlisted groups with night-silence on.",
-                              enum_labels={"all": "所有群", "selected": "指定群（白名单）"}),
-    )
-    gate_segment_types: list[Literal["sleep", "nap", "rest", "study", "work", "leisure", "meal", "travel"]] = Field(
-        default_factory=lambda: ["sleep", "nap"],
-        description="按日程判断模式下触发群闸门的日程类型；按设定时间模式下不参与生效。",
-        json_schema_extra=_ui("群闸门生效的日程类型",
-            "按日程判断模式下：日程进入所列段型时群闸门即生效（任意时间）；按设定时间模式下不参与生效。默认与私聊一致：夜间睡眠+午休。", 4,
-            label_en="Group Gated Schedule Types",
-            hint_en="In schedule mode the group gate activates on listed kinds; in time-window mode this list is inert."),
-        enum_labels={"sleep": "夜间睡眠（sleep）", "nap": "午休小睡（nap）", "rest": "普通休息（rest）",
-                     "study": "学习（study）", "work": "工作（work）", "leisure": "休闲（leisure）",
-                     "meal": "餐饮（meal）", "travel": "出行（travel）"})
-    night_start: str = Field(
-        default="22:30", description="群夜间闸门开始时间。",
-        json_schema_extra=_ui("群夜间闸门开始", "默认 22:30，支持跨午夜；仅在群闸门「按设定时间」模式下生效，与结束时间相同则该窗口永不生效。", 5, label_en="Group Night Start", hint_en="Group night window start in HH:MM format."),
-    )
-    night_end: str = Field(
-        default="08:00", description="群夜间闸门结束时间。",
-        json_schema_extra=_ui("群夜间闸门结束", "默认 08:00。", 6, label_en="Group Night End", hint_en="Group night window end in HH:MM format."),
-    )
-    nap_start: str = Field(
-        default="12:00", description="群午休闸门开始时间。",
-        json_schema_extra=_ui("群午休闸门开始", "默认 12:00。仅在群闸门「按设定时间」模式下生效。", 7, label_en="Group Nap Start", hint_en="Group nap window start in HH:MM format."),
-    )
-    nap_end: str = Field(
-        default="14:30", description="群午休闸门结束时间。",
-        json_schema_extra=_ui("群午休闸门结束", "默认 14:30。", 8, label_en="Group Nap End", hint_en="Group nap window end in HH:MM format."),
-    )
-    force_wake_terms: list[str] = Field(
-        default_factory=lambda: ["救命","急事","报警","醒醒","快醒","叫醒","出事了","很难受","撑不住","危险","轻生","自杀"],
-        description="群强制唤醒词：群消息含其中任意一词时放行；独立于私聊词表。",
-        json_schema_extra=_ui("群强制唤醒词","群消息含任意一词立即放行；可自由增删",9,
-                              label_en="Group Force Wake Terms",
-                              hint_en="Group messages containing any term bypass the group silence."),
-    )
+    gate_enabled: bool = Field(default=True, description="是否启用所有群聊的工作时段和概率。",
+        json_schema_extra=_ui("启用群聊回复策略", "对所有群生效；关闭后交给宿主处理，命令始终不受限制。", 1,
+                              label_en="Enable Group Reply Policy", hint_en="Apply working hours and probability to every group; commands are exempt."))
+    reply_probability: float = Field(default=0.18, ge=0, le=1, description="工作时段内每条群消息的放行概率。",
+        json_schema_extra=_ui("群聊回复概率", "0.18 表示 18%；关键词、提及和媒体不改变插件概率。宿主仍可能选择不回复。", 2,
+                              label_en="Group Reply Probability", hint_en="Fixed admission probability; the host can still decide not to reply."))
+    work_start: str = Field(default="00:00", description="群聊工作开始时间。",
+        json_schema_extra=_ui("群聊工作开始", "HH:MM，按环境时区；支持跨午夜，与结束相同表示全天。", 3,
+                              label_en="Group Work Start", hint_en="HH:MM in the configured timezone; equal endpoints mean all day."))
+    work_end: str = Field(default="00:00", description="群聊工作结束时间。",
+        json_schema_extra=_ui("群聊工作结束", "到此时刻停止放行普通消息；命令不受影响。", 4,
+                              label_en="Group Work End", hint_en="Ordinary messages stop being admitted at this time."))
     turn_enabled: bool = Field(
         default=True, description="群聊中为每条消息注册回复轮次锁，防止同一条群消息触发多次回复。",
         json_schema_extra=_ui("群聊轮次注册", "开启后按群号和发送者隔离轮次；关闭则群聊不做防重。", 10,
@@ -820,11 +729,15 @@ class GroupChatSettings(PluginConfigBase):
         json_schema_extra=_ui("群转私最小间隔（分钟）", "默认 6 小时，避免连续搬运群话题。", 19,
                               label_en="Group-share Interval (min)", hint_en="Default six hours to avoid repeated topic relays."))
 
-    @field_validator("night_start", "night_end", "nap_start", "nap_end", mode="before")
+    @field_validator("work_start", "work_end", mode="before")
     @classmethod
-    def validate_gate_time(cls, value: Any, info: ValidationInfo) -> str:
-        defaults={"night_start":"22:30","night_end":"08:00","nap_start":"12:00","nap_end":"14:30"}
-        return _time(value,defaults.get(info.field_name,"00:00"))
+    def validate_work_time(cls, value: Any) -> str:
+        return _work_time(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_reply_policy(cls, data: Any) -> Any:
+        return _migrate_reply_policy(data, "gate_enabled")
 
     @model_validator(mode="after")
     def unique_group_ids(self) -> "GroupChatSettings":
@@ -931,7 +844,6 @@ class ModelRoutingSettings(PluginConfigBase):
     reasoning_task: str = Field(default="planner", description="推理任务名。", json_schema_extra=_ui("推理任务", "默认 planner，用于搜索规划、自我关联等复杂判断（日程与场景已改走快速任务）。", 1, label_en="Reasoning Task", hint_en="MaiBot task name for reasoning."))
     creative_task: str = Field(default="replyer", description="创作任务名。", json_schema_extra=_ui("创作任务", "默认 replyer，用于梦境和叙事文本。", 2, label_en="Creative Task", hint_en="MaiBot task name for narrative generation."))
     schedule_task: str = Field(default="", description="日程任务覆盖。", json_schema_extra=_ui("日程任务覆盖", "留空继承快速任务；日程是结构化 JSON 任务，慢推理模型容易撞 30 秒超时。", 4, label_en="Schedule Override", hint_en="Leave empty to inherit fast task; slow reasoning models hit the 30s timeout."))
-    rest_wakeup_task: str = Field(default="", description="判醒任务覆盖。", json_schema_extra=_ui("判醒任务覆盖", "留空继承快速任务。", 5, label_en="Wake Decision Override", hint_en="Leave empty to inherit fast task."))
     continuity_task: str = Field(default="", description="连续话题任务覆盖。", json_schema_extra=_ui("话题整理任务覆盖", "留空继承快速任务。", 6, label_en="Continuity Override", hint_en="Leave empty to inherit fast task."))
     dream_task: str = Field(default="", description="梦境任务覆盖。", json_schema_extra=_ui("梦境任务覆盖", "留空继承创作任务。", 7, label_en="Dream Override", hint_en="Leave empty to inherit creative task."))
     diary_task: str = Field(default="", description="日记任务覆盖。", json_schema_extra=_ui("日记任务覆盖", "留空继承创作任务。", 9, label_en="Diary Override", hint_en="Leave empty to inherit creative task."))
@@ -1085,7 +997,7 @@ class MaiLifeSettings(PluginConfigBase):
     )
     group: GroupChatSettings = Field(
         default_factory=GroupChatSettings,
-        json_schema_extra=_ui("群聊设置", "白名单、休息闸门与轮次注册、观察与转述。", 2,  label_en="Group Chat", hint_en="Group rest gate and reply turn registration."),
+        json_schema_extra=_ui("群聊设置", "工作时段、回复概率、轮次注册、观察与转述。", 2,  label_en="Group Chat", hint_en="Working hours, reply probability, observation and relay."),
     )
     environment: EnvironmentSettings = Field(
         default_factory=EnvironmentSettings,
@@ -1102,7 +1014,7 @@ class MaiLifeSettings(PluginConfigBase):
     )
     rest_gate: RestGateSettings = Field(
         default_factory=RestGateSettings,
-        json_schema_extra=_ui("休息回复闸门", "睡眠和午休期间的判醒逻辑。", 6, label_en="Rest Reply Gate", hint_en="Wake decisions during sleep and naps."),
+        json_schema_extra=_ui("私聊回复", "工作时段内必定放行，默认全天。", 6, label_en="Private Replies", hint_en="All private messages pass during working hours, all day by default."),
     )
     context: ContextSettings = Field(
         default_factory=ContextSettings,
@@ -1176,10 +1088,10 @@ class MaiLifeSettings(PluginConfigBase):
                             ("note_retention_days","search_note_retention_days")):
                 if old in search:net.setdefault(new,search[old])
         if net:data["network"]=net
-        group=data.get("group")
-        if isinstance(group,dict) and "gate_mode" not in group:
-            # 群闸门生效方式曾与私聊共用：旧配置继承 rest_gate.gate_mode，行为不变。
-            rest=data.get("rest_gate")
-            if isinstance(rest,dict) and "gate_mode" in rest:group["gate_mode"]=rest["gate_mode"]
+        rest=data.get("rest_gate")
+        if isinstance(rest,dict) and "awake_grace_minutes" in rest:
+            state=dict(data.get("state") or {})
+            state.setdefault("awake_grace_minutes",rest["awake_grace_minutes"])
+            data["state"]=state
         return data
 
