@@ -28,7 +28,7 @@
 # 配置结构版本，请勿手动修改。
 config_version = "1.16.0"
 
-# 插件总开关。关闭后保留数据库，但停止状态维护、日程生成和主动消息。
+# 插件总开关。关闭后保留数据库，但停止任务执行、状态维护和主动消息。
 enabled = true
 
 
@@ -140,7 +140,7 @@ weather_refresh_minutes = 30
 
 
 [memory]
-# 离线生活记忆默认开启；关闭总开关不会删除已有数据。
+# 日记和重要日期默认开启；日记只汇总真实活动，不补造停机经历。
 enabled = true
 diary_enabled = true
 diary_hour = 2
@@ -198,16 +198,15 @@ enabled = true
 retention_days = 30
 
 
-[schedule]
-# 每天强制重新生成生活框架的小时，范围 0～23。
-# 插件首次启动且缺少当日日程时仍会立即生成。
-generate_hour = 3
-
-# 提前多少分钟细化当前和下一生活场景，范围 10～240 分钟。
-detail_lead_minutes = 60
-
-# 日程骨架模板，相对于插件目录。普通用户通常无需修改。
-template_file = "mai_template.json"
+[reading]
+# 在固定阅读时段读取真实小说；不依赖 creation.enabled。
+# 将 UTF-8 .txt 文件放入插件目录下 novels 文件夹，按文件名排序逐段阅读。
+# 原文片段和批注存入私人书柜，朋友无权读取；学习结果供上下文使用，不训练模型权重。
+enabled = true
+directory = "novels"
+chunk_chars = 4000
+daily_max = 4
+interval_minutes = 60
 
 
 [proactive]

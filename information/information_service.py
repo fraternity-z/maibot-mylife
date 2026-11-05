@@ -200,6 +200,9 @@ class InformationService:
         plan=await self._plan_query(now,personality,state,schedule,chat_topics)
         query=await self.search.sanitize_query(plan["query"])
         if not query:return False
+        note_id=hashlib.sha256(f"{now.date()}:{query}".encode()).hexdigest()
+        if any(item["id"]==note_id for item in await self.store.recent_exploration_notes(now.timestamp(),100)):
+            return False
         response=await self.search.search(query,operation="search",max_results=int(self.config.network.max_results))
         results=response["results"]
         if not results:return False
@@ -207,7 +210,7 @@ class InformationService:
         association=await self._associate({"kind":"search","title":plan["topic"],"summary":summary,
                                            "sources":[item["url"] for item in results if item["url"]]},
                                           personality,state,schedule)
-        now_ts=now.timestamp(); note_id=hashlib.sha256(f"{now.date()}:{query}".encode()).hexdigest(); opportunity_id=""
+        now_ts=now.timestamp(); opportunity_id=""
         if association["score"]>=float(self.config.network.association_threshold) and self.config.network.proactive_share_enabled:
             opportunity_id=hashlib.sha1(f"search-op:{note_id}".encode()).hexdigest()[:20]
             await self.store.add_opportunity({
@@ -239,18 +242,19 @@ class InformationService:
     async def context(self,now:Any)->dict[str,Any]:
         limit=int(self.config.network.context_item_limit)
         if not self.config.network.enabled or limit<=0:return {"news":[],"explorations":[]}
-        # 被动上下文阈值跟随“自我关联阈值”配置，但封顶 0.5，避免低门槛把弱关联内容塞进 Prompt。
-        threshold=min(float(self.config.network.association_threshold),0.5)
-        news=[item for item in await self.store.recent_news_items(now.timestamp(),limit*2,associated_only=True)
-              if float(item.get("relevance_score") or 0)>=threshold][:limit]
-        notes=[item for item in await self.store.recent_exploration_notes(now.timestamp(),limit*2)
-               if float(item.get("relevance_score") or 0)>=threshold][:limit]
-        return {"news":[{"title":item["title"],"summary":item["summary"],"score":item["relevance_score"]} for item in news],
-                "explorations":[{"topic":item["topic"],"summary":item["summary"],"score":item["relevance_score"]} for item in notes]}
+        # 真实读到的资料都可以回忆；关联评分只控制主动分享，不抹去低分学习记录。
+        news=await self.store.recent_news_items(now.timestamp(),limit,associated_only=True)
+        notes=await self.store.recent_exploration_notes(now.timestamp(),limit)
+        return {"news":[{"title":item["title"],"summary":item["summary"],"score":item["relevance_score"],
+                         "url":str(item.get("url") or ""),
+                         "article_excerpt":str(item.get("content") or "")[:1200],
+                         "read_scope":"article" if item.get("content") else "snippet"} for item in news],
+                "explorations":[{"topic":item["topic"],"summary":item["summary"],"score":item["relevance_score"],
+                                 "source_urls":item.get("source_urls") or []} for item in notes]}
 
     async def status(self,now:Any)->dict[str,Any]:
         return {"enabled":bool(self.config.network.enabled),"news_enabled":bool(self.config.network.news_enabled),
-                "search_enabled":bool(self.config.network.news_enabled),
+                "search_enabled":bool(self.config.network.search_enabled),
                 "sources":1 if self.search.available() else 0,
                 "recent_news":len(await self.store.recent_news_items(now.timestamp(),100)),
                 "recent_explorations":len(await self.store.recent_exploration_notes(now.timestamp(),100)),

@@ -33,7 +33,7 @@ class InspirationService:
         return text[:limit]
 
     async def collect(self,now:Any)->int:
-        """聚合近期日记、生活场景和可选外部阅读，使用稳定来源 ID 去重。"""
+        """聚合近期日记、已执行活动和可选外部阅读，使用稳定来源 ID 去重。"""
         count=0; cutoff=now.timestamp()-int(self.config.creation.inspiration_lookback_days)*86400
         for diary in await self.store.list_diaries(int(self.config.creation.inspiration_lookback_days)):
             if float(diary.get("created_at") or 0)<cutoff:continue
@@ -41,10 +41,13 @@ class InspirationService:
                 f"日记主题：{diary.get('title','')}；心情：{diary.get('mood_summary','')}；抽象内容：{diary.get('content','')}",
                 "private",0.64,now))
         for target in (now.date(),(now-timedelta(days=1)).date()):
-            scenes=await self.store.scenes_for_day(target.isoformat())
-            values=[f"{item.get('kind','')}：{item.get('summary','')}，{item.get('scene') or ''}" for item in scenes]
+            nodes=[item for item in await self.store.get_framework(target.isoformat())
+                   if str(item.get("id") or "").startswith("task:")]
+            scenes=await self.store.get_scenes_by_framework_ids([item["id"] for item in nodes]) if nodes else {}
+            values=[str(scenes[item["id"]]["scene"]).strip() for item in nodes
+                    if str(scenes.get(item["id"],{}).get("scene") or "").strip()]
             if values:
-                count+=int(await self._add("life",target.isoformat(),"；".join(values),"public",0.55,now))
+                count+=int(await self._add("activity",target.isoformat(),"；".join(values),"public",0.55,now))
         count+=await self._collect_external(now)
         return count
 

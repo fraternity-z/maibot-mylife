@@ -17,7 +17,7 @@ README.md CHANGELOG.md config.toml.example docs/schedule-provider-api.md
 core/__init__.py core/environment.py core/llm_service.py core/storage.py core/network_clock.py
 creation/__init__.py creation/bookshelf_service.py creation/creation_service.py creation/inspiration_service.py
 information/__init__.py information/host_search.py information/http_client.py
-information/information_service.py information/news_service.py
+information/information_service.py information/news_service.py information/reading_service.py
 life/__init__.py life/continuity.py life/memory_service.py
 life/proactive.py life/rest_gate.py life/schedule_service.py
 management/__init__.py management/admin_service.py

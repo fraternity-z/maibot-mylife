@@ -86,13 +86,13 @@ info = await ctx.api.call("fraternity-z.mai-mylife.get_schedule_provider_info", 
 
 ## get_schedule_snapshot 当前快照
 
-**用途**：一次获取麦麦当前在做什么、当前场景和接下来的安排。只读，不生成日程。
+**用途**：一次获取当前任务时段、实际执行记录和接下来的安排。时段代表计划，只有非空执行记录表示任务实际完成。只读，不生成日程。
 
 | 参数 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `future_limit` | int | `3` | `next_activities` 最多返回几条；接受 0~20，越界钳到边界，非法值回退默认 3 |
 
-`data` 结构（示例：10-25 10:00，正在图书馆自习）：
+`data` 结构（示例：10-25 10:00，当前阅读时段已完成一次小说分段阅读）：
 
 ```json
 {
@@ -101,15 +101,15 @@ info = await ctx.api.call("fraternity-z.mai-mylife.get_schedule_provider_info", 
   "revision": "9f3ab02c1d8e4f5a",
   "schedule_available": true,
   "current": {
-    "id": "a1", "kind": "study", "name": "图书馆自习", "description": "",
-    "start_at": "2026-10-25T09:00:00+08:00", "end_at": "2026-10-25T11:00:00+08:00",
-    "location": "图书馆", "scene": "坐在窗边整理今天的笔记"
+    "id": "task:a1", "kind": "study", "name": "待执行：阅读小说", "description": "",
+    "start_at": "2026-10-25T10:00:00+08:00", "end_at": "2026-10-25T12:00:00+08:00",
+    "location": "在线", "scene": "已阅读小说片段并保存笔记"
   },
   "next_activities": [
     {
-      "id": "a2", "kind": "meal", "name": "午饭", "description": "",
-      "start_at": "2026-10-25T11:00:00+08:00", "end_at": "2026-10-25T12:00:00+08:00",
-      "location": "食堂", "scene": ""
+      "id": "task:a2", "kind": "leisure", "name": "待执行：检索新闻和主题资料", "description": "",
+      "start_at": "2026-10-25T12:00:00+08:00", "end_at": "2026-10-25T14:00:00+08:00",
+      "location": "在线", "scene": ""
     }
   ]
 }
@@ -157,14 +157,14 @@ info = await ctx.api.call("fraternity-z.mai-mylife.get_schedule_provider_info", 
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `id` | string | 稳定活动 ID：内容哈希（日期+起止+类型+摘要），同一内容重复生成不变，跨天唯一，可作去重键 |
+| `id` | string | 稳定活动 ID：新任务使用 `task:` 前缀与内容哈希，同一内容不变，跨天唯一，可作去重键；调用方应将其视为不透明标识 |
 | `kind` | string | 段型枚举：`sleep`/`nap`/`rest`/`study`/`work`/`leisure`/`meal`/`travel` |
 | `name` | string | 活动名（日程摘要原文，中文） |
 | `description` | string | 恒为空串——当前无独立数据源，占位保持结构稳定 |
 | `start_at` | string | 开始时刻（该活动所属日历日 + 段内分钟，配置时区，ISO 8601 带偏移） |
 | `end_at` | string | 结束时刻；跨午夜段的结束落在次日 00:00 |
 | `location` | string | 地点（可空串） |
-| `scene` | string | 细化场景文本。**只有被细化过的节点有场景**（通常是临近/进行中的段），过去的段大概率是空串——调用方必须容忍空场景 |
+| `scene` | string | 任务实际执行结果的简短记录，不包含私人小说正文或笔记。没有成功执行时为空串，不能根据时段推断任务已完成。旧历史日程可能仍有旧版生成场景，其不代表真实执行 |
 
 ## 错误一览
 
@@ -183,9 +183,9 @@ info = await ctx.api.call("fraternity-z.mai-mylife.get_schedule_provider_info", 
 
 - **只读保证**：三个接口都不写库、不调模型、不生成日程；可放心高频调用。
 - **时区单一**：所有时刻字段都是配置时区的 aware ISO 8601（`+08:00` 形式）。时区取自插件配置 `environment.timezone`，修改配置后即刻生效。
-- **当日重生成**：同一天框架被重写（如热更新强制重生成）时活动 id 可能变化、场景清空——以 `revision` 变化为准做增量刷新，不要假设 id 永生不变。
+- **升级兼容**：当日旧版生活框架会替换为固定任务时段，活动 id 和 `revision` 随之改变；历史数据不删除。新框架后续维护不会反复重建、清除已有执行记录。
 - **schedule_available=false 不重试生成**：快照只报告现状；想要日程生成是麦日常自己的后台循环的事，与查询无关。
-- **帧与并发**：快照单次读取内 `current`/`next_activities` 来自同一份框架，帧内一致；连续两次调用之间可能跨过重生成。
+- **帧与并发**：快照单次读取内 `current`/`next_activities` 来自同一份框架，帧内一致；连续两次调用之间执行记录可能更新。
 
 ## 已知修复
 

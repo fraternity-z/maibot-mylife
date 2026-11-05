@@ -458,13 +458,13 @@ class MemorySettings(PluginConfigBase):
                               label_en="Enable Life Memory", hint_en="Keep existing data while pausing memory settlement."),
     )
     diary_enabled: bool = Field(
-        default=True, description="每天生成前一天的抽象日记。",
-        json_schema_extra=_ui("启用抽象日记", "只使用生活节点和互动数量，不复制聊天原文。", 5,
+        default=True, description="每天根据前一天的真实执行记录整理日记。",
+        json_schema_extra=_ui("启用日记", "只使用实际执行活动和匿名互动数量，不补写未发生的经历。", 5,
                               label_en="Enable Abstract Diary", hint_en="Uses life events and interaction counts, never chat transcripts."),
     )
     diary_hour: int = Field(
         default=2, ge=0, le=23, description="每天结算前一天日记的小时。",
-        json_schema_extra=_ui("日记结算时间（小时）", "默认凌晨 2 点，在 3 点生成新日程之前完成。", 6,
+        json_schema_extra=_ui("日记结算时间（小时）", "默认凌晨 2 点；停机且无实际活动记录的日期跳过。", 6,
                               label_en="Diary Settlement Hour", hint_en="Hour used to settle the previous day."),
     )
     diary_max_chars: int = Field(
@@ -743,9 +743,8 @@ class ModelRoutingSettings(PluginConfigBase):
     __ui_order__: ClassVar[int] = 13
 
     fast_task: str = Field(default="utils", description="快速整理任务名。", json_schema_extra=_ui("快速任务", "默认 utils，用于连续话题等轻量任务。", 0, label_en="Fast Task", hint_en="MaiBot task name for lightweight analysis."))
-    reasoning_task: str = Field(default="planner", description="推理任务名。", json_schema_extra=_ui("推理任务", "默认 planner，用于搜索规划、自我关联等复杂判断（日程与场景已改走快速任务）。", 1, label_en="Reasoning Task", hint_en="MaiBot task name for reasoning."))
+    reasoning_task: str = Field(default="planner", description="推理任务名。", json_schema_extra=_ui("推理任务", "默认 planner，用于搜索规划、自我关联等复杂判断；日常任务窗口无需模型。", 1, label_en="Reasoning Task", hint_en="MaiBot task name for reasoning."))
     creative_task: str = Field(default="replyer", description="创作任务名。", json_schema_extra=_ui("创作任务", "默认 replyer，用于日记和叙事文本。", 2, label_en="Creative Task", hint_en="MaiBot task name for narrative generation."))
-    schedule_task: str = Field(default="", description="日程任务覆盖。", json_schema_extra=_ui("日程任务覆盖", "留空继承快速任务；日程是结构化 JSON 任务，慢推理模型容易撞 30 秒超时。", 4, label_en="Schedule Override", hint_en="Leave empty to inherit fast task; slow reasoning models hit the 30s timeout."))
     continuity_task: str = Field(default="", description="连续话题任务覆盖。", json_schema_extra=_ui("话题整理任务覆盖", "留空继承快速任务。", 6, label_en="Continuity Override", hint_en="Leave empty to inherit fast task."))
     diary_task: str = Field(default="", description="日记任务覆盖。", json_schema_extra=_ui("日记任务覆盖", "留空继承创作任务。", 9, label_en="Diary Override", hint_en="Leave empty to inherit creative task."))
     date_analysis_task: str = Field(default="", description="日期分析任务覆盖。", json_schema_extra=_ui("日期分析任务覆盖", "留空继承快速任务。", 10, label_en="Date Analysis Override", hint_en="Leave empty to inherit fast task."))
@@ -757,9 +756,6 @@ class ModelRoutingSettings(PluginConfigBase):
     creation_body_task: str = Field(default="", description="创作正文任务覆盖。", json_schema_extra=_ui("创作正文任务覆盖", "留空继承创作任务。", 18, label_en="Creation Body Override", hint_en="Leave empty to inherit creative task."))
     creation_review_task: str = Field(default="", description="创作审校任务覆盖。", json_schema_extra=_ui("创作审校任务覆盖", "留空继承推理任务。", 19, label_en="Creation Review Override", hint_en="Leave empty to inherit reasoning task."))
     reading_annotation_task: str = Field(default="", description="阅读批注任务覆盖。", json_schema_extra=_ui("阅读批注任务覆盖", "留空继承创作任务。", 20, label_en="Reading Annotation Override", hint_en="Leave empty to inherit creative task."))
-    scene_detail_task: str = Field(default="", description="临近场景细化任务覆盖。", json_schema_extra=_ui(
-        "场景细化任务覆盖", "留空继承快速任务；同日程，慢推理模型容易撞 30 秒超时。", 21,
-        label_en="Scene Detail Override", hint_en="Leave empty to inherit fast task; slow reasoning models hit the 30s timeout."))
 
 
     max_output_tokens: int = Field(default=0, ge=0, description="模型输出 token 上限；0=不限制，由服务商决定。", json_schema_extra=_ui("输出 token 上限", "0=不限制（推荐）。推理模型的思考链占用输出预算，写死小上限会把正文挤成空响应；仅在对成本敏感时设正数。", 22, label_en="Max Output Tokens", hint_en="0 = unlimited (provider decides). Tight caps starve content on reasoning models."))
@@ -775,39 +771,22 @@ class UsageSettings(PluginConfigBase):
     retention_days: int = Field(default=30, ge=1, le=365, description="明细保留天数。", json_schema_extra=_ui("明细保留天数", "每日聚合可长期保留，调用明细按此清理。", 1, label_en="Detail Retention Days", hint_en="Retention period for individual call records."))
 
 
-class ScheduleSettings(PluginConfigBase):
-    """每日生活框架与临近场景细化设置。"""
+class ReadingSettings(PluginConfigBase):
+    """从本地真实文本分段阅读，进度和笔记独立于创作功能。"""
 
-    __ui_label__: ClassVar[str] = "日程与场景"
+    __ui_label__: ClassVar[str] = "小说阅读"
     __ui_order__: ClassVar[int] = 8
-    __ui_i18n__: ClassVar[dict[str, dict[str, str]]] = {
-        "en_US": {"title": "Schedule and Scenes", "description": "Daily framework generation and near-term scene expansion."}
-    }
 
-    generate_hour: int = Field(
-        default=3, ge=0, le=23,
-        description="每天强制重新生成生活框架的小时。",
-        json_schema_extra=_ui(
-            "日程生成时间（小时）", "0～23 的整数。默认凌晨 3 点；缺少当日日程时仍会立即生成。", 0,
-            label_en="Schedule Generation Hour", hint_en="Hour from 0 to 23. Missing schedules are still generated immediately.",
-        ),
-    )
-    detail_lead_minutes: int = Field(
-        default=60, ge=10, le=240,
-        description="提前多少分钟细化即将开始的生活场景。",
-        json_schema_extra=_ui(
-            "场景提前细化时间（分钟）", "默认提前 60 分钟细化当前段和下一段，减少模型调用并保持环境新鲜。", 1,
-            label_en="Scene Detail Lead Time (min)", hint_en="Expand current and next scenes this many minutes before they start.",
-        ),
-    )
-    template_file: str = Field(
-        default="mai_template.json",
-        description="日程骨架模板文件名。",
-        json_schema_extra=_ui(
-            "日程模板文件", "相对于插件目录。LLM 失败或返回非法日程时使用该模板降级。", 2,
-            label_en="Schedule Template File", hint_en="Path relative to the plugin directory, used as generation fallback.", placeholder="mai_template.json",
-        ),
-    )
+    enabled: bool = Field(default=True, description="在阅读时段分段阅读本地小说。",
+        json_schema_extra=_ui("启用小说阅读", "无文本时跳过；阅读笔记仅主人可见。", 0))
+    directory: str = Field(default="novels", description="插件目录内存放 UTF-8 .txt 小说的文件夹。",
+        json_schema_extra=_ui("小说目录", "只读取目录直属文本文件，拒绝越界路径和链接。", 1))
+    chunk_chars: int = Field(default=4000, ge=500, le=12000, description="每次实际阅读的字符上限。",
+        json_schema_extra=_ui("每次阅读字数", "保存片段、进度和私人批注，不把摘要当作读完整本书。", 2))
+    daily_max: int = Field(default=4, ge=0, le=24, description="每天最多阅读片段数，0 表示暂停。",
+        json_schema_extra=_ui("每日阅读上限", "按已保存的片段计数，重启不重置。", 3))
+    interval_minutes: int = Field(default=60, ge=1, le=1440, description="两次阅读的最小间隔（分钟）。",
+        json_schema_extra=_ui("阅读间隔", "由持久化记录控制，避免反复读取或连续调用模型。", 4))
 
 
 class ProactiveSettings(PluginConfigBase):
@@ -915,9 +894,9 @@ class MaiLifeSettings(PluginConfigBase):
         default_factory=ContextSettings,
         json_schema_extra=_ui("被动回复增强", "关系、状态、意图和连续话题。", 7, label_en="Passive Reply Context", hint_en="Relationship, state, intent and conversation continuity."),
     )
-    schedule: ScheduleSettings = Field(
-        default_factory=ScheduleSettings,
-        json_schema_extra=_ui("日程与场景", "每日框架和临近场景细化。", 8, label_en="Schedule and Scenes", hint_en="Daily framework and scene expansion."),
+    reading: ReadingSettings = Field(
+        default_factory=ReadingSettings,
+        json_schema_extra=_ui("小说阅读", "真实文本、阅读进度和私人笔记。", 8, label_en="Novel Reading", hint_en="Source text, progress and private reading notes."),
     )
     proactive: ProactiveSettings = Field(
         default_factory=ProactiveSettings,

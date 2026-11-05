@@ -43,7 +43,8 @@ class BuildPluginTests(unittest.TestCase):
         self.assertEqual(result.name,"mai-mylife-1.2.3.zip")
         with ZipFile(result) as archive:
             self.assertEqual(set(archive.namelist()),set(builder.PACKAGE_FILES))
-            self.assertEqual(len(archive.namelist()),47)
+            self.assertEqual(len(archive.namelist()),48)
+            self.assertIn("information/reading_service.py",archive.namelist())
             self.assertTrue({"life/bedtime.py","life/life_state.py","messaging/recall_service.py"}.isdisjoint(archive.namelist()))
             self.assertIn(b"untracked working tree",archive.read("core/network_clock.py"))
             self.assertIn("_manifest.json",archive.namelist())

@@ -77,33 +77,122 @@ def test_proactive_needs_no_vitals_and_preserves_failed_trigger_cleanup(modules,
 def test_inspiration_collects_diary_and_scenes_without_dream_storage(modules):
     config=SimpleNamespace(creation=SimpleNamespace(inspiration_lookback_days=3,external_reading_enabled=False,
                                                     external_reading_api_name=""))
-    diary={"day":"2026-11-04","created_at":NOW.timestamp()-86400,"title":"普通的一天",
-           "mood_summary":"平稳","content":"做了晚饭"}
+    diary={"day":"2026-11-04","created_at":NOW.timestamp()-86400,"title":"新闻阅读",
+           "mood_summary":"平稳","content":"整理了新闻"}
     store=SimpleNamespace(list_diaries=AsyncMock(return_value=[diary]),
-        scenes_for_day=AsyncMock(side_effect=[[{"kind":"meal","summary":"准备午饭","scene":"在厨房切菜"}],[]]),
+        get_framework=AsyncMock(side_effect=[[{"id":"task:news","kind":"leisure","summary":"待执行：检索新闻"}],[]]),
+        get_scenes_by_framework_ids=AsyncMock(return_value={"task:news":{"scene":"已检索新闻并保存摘要"}}),
         add_creation_inspiration=AsyncMock(return_value=True))
     service=modules.inspiration_service.InspirationService(Mock(),store,config,Mock(),Mock())
     assert asyncio.run(service.collect(NOW))==2
     items=[call.args[0] for call in store.add_creation_inspiration.await_args_list]
-    assert [(item["source_kind"],item["privacy_ceiling"]) for item in items]==[("diary","private"),("life","public")]
-    assert "准备午饭" in items[1]["prompt_digest"]
+    assert [(item["source_kind"],item["privacy_ceiling"]) for item in items]==[("diary","private"),("activity","public")]
+    assert "已检索新闻并保存摘要" in items[1]["prompt_digest"]
+    assert "待执行" not in items[1]["prompt_digest"]
 
 
-def test_diary_uses_daily_life_and_anonymous_counts_without_dream_storage(modules):
+def test_diary_uses_executed_activities_and_anonymous_counts_without_dream_storage(modules):
     config=SimpleNamespace(memory=SimpleNamespace(diary_max_chars=1000))
-    store=SimpleNamespace(scenes_for_day=AsyncMock(return_value=[{"kind":"meal","summary":"做了晚饭","location":"厨房"}]),
+    store=SimpleNamespace(get_framework=AsyncMock(return_value=[
+        {"id":"task:news","kind":"leisure","summary":"待执行：检索新闻","location":"在线"}]),
+        get_scenes_by_framework_ids=AsyncMock(return_value={"task:news":{"scene":"检索并整理了2条新闻摘要"}}),
         interaction_counts=AsyncMock(return_value=[{"user_id":"private-user","count":4}]),
         save_diary=AsyncMock(),list_users=AsyncMock(return_value=[]))
     llm=SimpleNamespace(task_available=Mock(return_value=True),generate_json=AsyncMock(return_value={
-        "title":"普通的一天","content":"晚饭很好吃","mood_summary":"有点开心"}))
+        "title":"新闻阅读","content":"整理了新闻摘要","mood_summary":"有些收获"}))
     service=modules.memory_service.MemoryService(store,config,llm,Mock())
     asyncio.run(service._generate_diary(NOW,NOW.date()-timedelta(days=1)))
     prompt=llm.generate_json.await_args.args[0]
     source=json.loads(prompt.split("\n",1)[1])
     assert "dreams" not in source and "private-user" not in prompt
     assert source["interaction_counts"]=={"total":4,"active_people":1}
-    assert source["life"][0]["summary"]=="做了晚饭"
-    assert store.save_diary.await_args.args[3]=="有点开心"
+    assert source["life"][0]["summary"]=="检索并整理了2条新闻摘要"
+    assert "待执行" not in source["life"][0]["summary"]
+    assert "不得虚构" in prompt
+    assert store.save_diary.await_args.args[3]=="有些收获"
+
+
+@pytest.mark.parametrize("nodes,scenes",[
+    ([],{}),
+    ([{"id":"old-scene","kind":"meal"}],{"old-scene":{"scene":"在厨房做饭"}}),
+    ([{"id":"task:reading","kind":"study"}],{}),
+    ([{"id":"task:reading","kind":"study"}],{"task:reading":{"scene":" "}}),
+])
+def test_diary_skips_unexecuted_and_legacy_activities(modules,nodes,scenes):
+    store=SimpleNamespace(get_framework=AsyncMock(return_value=nodes),
+        get_scenes_by_framework_ids=AsyncMock(return_value=scenes),save_diary=AsyncMock(),
+        interaction_counts=AsyncMock())
+    llm=SimpleNamespace(generate_json=AsyncMock())
+    service=modules.memory_service.MemoryService(store,Mock(),llm,Mock())
+    asyncio.run(service._generate_diary(NOW,NOW.date()-timedelta(days=1)))
+    store.save_diary.assert_not_awaited()
+    store.interaction_counts.assert_not_awaited()
+    llm.generate_json.assert_not_awaited()
+
+
+def test_diary_backfill_never_fabricates_offline_days_and_is_idempotent(modules):
+    recorded_day=(NOW.date()-timedelta(days=2)).isoformat(); saved={}
+    nodes=[{"id":"task:reading","kind":"study","location":"在线","summary":"待执行：阅读小说"}]
+    store=SimpleNamespace(get_diary=AsyncMock(side_effect=lambda day:saved.get(day,{})),
+        get_framework=AsyncMock(side_effect=lambda day:nodes if day==recorded_day else []),
+        get_scenes_by_framework_ids=AsyncMock(return_value={"task:reading":{"scene":"已阅读小说片段并保存笔记"}}),
+        interaction_counts=AsyncMock(return_value=[]),save_diary=AsyncMock(side_effect=lambda day,*args:saved.update({day:args})),
+        list_users=AsyncMock(return_value=[]))
+    llm=SimpleNamespace(task_available=Mock(return_value=False),generate_json=AsyncMock())
+    service=modules.memory_service.MemoryService(store,SimpleNamespace(memory=SimpleNamespace(diary_max_chars=1000)),llm,Mock())
+    asyncio.run(service._backfill_diaries(NOW))
+    asyncio.run(service._backfill_diaries(NOW))
+    assert list(saved)==[recorded_day]
+    store.save_diary.assert_awaited_once()
+    assert saved[recorded_day][0]==f"{recorded_day} 活动记录"
+    assert "已阅读小说片段并保存笔记" in saved[recorded_day][1]
+    llm.generate_json.assert_not_awaited()
+
+
+@pytest.mark.parametrize("role",["owner","friend"])
+def test_prompts_show_execution_and_sources_and_keep_reading_private(modules,role):
+    builder=modules.prompt_builder.PromptBuilder()
+    context={"current":{"id":"task:news","kind":"leisure","summary":"待执行：检索新闻"},
+             "scene":{"scene":"检索了2条新闻摘要"}}
+    information={"news":[{"title":"测试新闻","summary":"新闻摘要","url":"https://example.org/news","read_scope":"snippet"}],
+                 "reading":{"items":[{"title":"私人小说","source":"novels/example.txt","range":"1-4/20",
+                                          "excerpt":"私人阅读摘录","annotation":"私人阅读笔记"}]}}
+    for method in (builder.planner,builder.replyer):
+        prompt=method({"current_activity":"旧的虚构场景"},{},context,{"role":role},information=information,max_chars=8000)
+        assert "检索了2条新闻摘要" in prompt and "旧的虚构场景" not in prompt
+        assert "计划和旧场景不代表完成" in prompt and "不代表模型训练" in prompt
+        assert "仅检索摘要" in prompt and "https://example.org/news" in prompt
+        assert ("私人阅读摘录" in prompt)==(role=="owner")
+        assert ("私人阅读笔记" in prompt)==(role=="owner")
+
+
+def test_prompts_do_not_recognize_old_generated_scenes_as_execution(modules):
+    builder=modules.prompt_builder.PromptBuilder()
+    context={"current":{"id":"legacy","summary":"旧计划"},"scene":{"scene":"虚构的旧场景"}}
+    for method in (builder.planner,builder.replyer):
+        prompt=method({"current_activity":"虚构的旧场景"},{},context,{})
+        assert "虚构的旧场景" not in prompt
+        assert "当前时段尚无实际执行记录" in prompt
+
+
+def test_reading_notes_keep_a_context_budget_when_news_is_long(modules):
+    information={"news":[{"title":"近期新闻","summary":"新闻内容"*1000}],
+                 "reading":{"items":[{"title":"小说","source":"novels/story.txt","annotation":"已读片段的批注",
+                                          "excerpt":"小说原文"*1000}]}}
+    text=modules.prompt_builder.PromptBuilder._information_text(information,is_owner=True)
+    assert "近期新闻" in text and "已读片段的批注" in text
+    assert len(text)<1250
+
+
+def test_news_article_knowledge_reaches_prompts_with_reading_notes(modules):
+    information={"news":[{"title":"测试新闻","summary":"仅有标题摘要","url":"https://example.org/article",
+                           "read_scope":"article","article_excerpt":"正文中的新增知识。"+"正文"*1000}],
+                 "reading":{"items":[{"title":"小说","annotation":"已读小说片段批注"}]}}
+    builder=modules.prompt_builder.PromptBuilder()
+    for method in (builder.planner,builder.replyer):
+        prompt=method({}, {}, {}, {"role":"owner"},information=information,max_chars=8000)
+        assert "已读正文" in prompt and "正文中的新增知识" in prompt
+        assert "https://example.org/article" in prompt and "已读小说片段批注" in prompt
 
 
 @pytest.mark.parametrize("method",["associate","plan_query"])

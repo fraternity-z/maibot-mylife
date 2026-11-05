@@ -83,25 +83,27 @@ class NewsService:
         return kept
 
     async def _plan_query(self,now,personality:str,schedule:dict)->str:
-        """让麦麦根据人格自主决定此刻想了解什么新闻；模型不可用时跳过。"""
-        if not self.llm.task_available("news"):
-            return ""
+        """模型可选；规划失败仍用当天的明确新闻查询，结果必须由宿主实际检索。"""
+        fallback=f"今日新闻 {now.date().isoformat()}"
+        if not self.llm.task_available("news"):return fallback
         current=schedule.get("current") or {}
-        result=await self.llm.generate_json(
-            f"你是{self.bot_name}。根据你的人设与当前状态，自主决定此刻最想了解的一类新闻，给出一个简短、"
-            "适合网页搜索的查询词（不超过 40 字）。不要搜索用户身份、账号、群名、私密关系或聊天原句。\n"
-            + json.dumps({
-                "personality": personality[:1200],
-                "current_activity": current.get("summary") or "",
-            }, ensure_ascii=False)
-            + "\n只返回JSON：{\"query\":\"\"}。",
-            f"你自主决定{self.bot_name}此刻读什么新闻。", {"query": ""}, max_tokens=0,
-            task_kind="news", request_type="news_query_planning",
-        )
-        if not isinstance(result,dict):
-            return ""
-        query=" ".join(str(result.get("query") or "").split())[:100]
-        return query
+        try:
+            result=await self.llm.generate_json(
+                f"你是{self.bot_name}。根据你的人设与当前状态，自主决定此刻最想了解的一类新闻，给出一个简短、"
+                "适合网页搜索的查询词（不超过 40 字）。不要搜索用户身份、账号、群名、私密关系或聊天原句。\n"
+                + json.dumps({
+                    "personality": personality[:1200],
+                    "current_activity": current.get("summary") or "",
+                }, ensure_ascii=False)
+                + "\n只返回JSON：{\"query\":\"\"}。",
+                f"你自主决定{self.bot_name}此刻读什么新闻。", {"query":fallback}, max_tokens=0,
+                task_kind="news", request_type="news_query_planning",
+            )
+        except Exception:
+            self.logger.warning("[MaiLife] 新闻查询规划失败，改用当日新闻查询")
+            return fallback
+        query=str(result.get("query") or "") if isinstance(result,dict) else ""
+        return " ".join(query.split())[:100] or fallback
 
     async def _read_articles(self,results:list[dict[str,Any]])->dict[int,str]:
         """并发经宿主 web.fetch 读取最多三篇正文；任一页面失败只降级为搜索摘要。"""

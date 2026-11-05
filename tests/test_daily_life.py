@@ -1,4 +1,4 @@
-"""验证精简生活数据、旧库兼容和普通日程场景。"""
+"""验证固定活动窗口、实际执行记录和旧库兼容。"""
 import importlib.util
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -44,10 +44,9 @@ class DailyLifeTests(unittest.IsolatedAsyncioTestCase):
         self.directory=tempfile.TemporaryDirectory()
         self.store=storage.LifeStore(self.directory.name,clock=lambda:NOW.timestamp())
         await self.store.initialize()
-        self.config=SimpleNamespace(schedule=SimpleNamespace(template_file="missing-template.json",detail_lead_minutes=30))
+        self.config=SimpleNamespace()
         self.llm=Mock(task_available=Mock(return_value=False),generate_json=AsyncMock(side_effect=RuntimeError("offline")))
         self.service=schedule.ScheduleService(self.store,self.config,self.llm,self.directory.name,Mock())
-        self.service.retry_attempts=1
 
     async def asyncTearDown(self):
         await self.store.close()
@@ -110,17 +109,18 @@ class DailyLifeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(list(Path(directory).glob("*.incompatible.*")))
                 finally:await store.close()
 
-    async def test_legacy_dream_candidates_are_preserved_but_not_selected(self):
+    async def test_legacy_generated_candidates_are_preserved_but_only_actual_activity_is_selected(self):
         for kind in ("dream","scene"):
             await self.store.add_opportunity({"id":kind,"framework_id":f"{kind}:1","topic":kind,
                 "motive":"分享","weight":0.8,"expires_at":NOW.timestamp()+3600})
+        for kind in ("dream","life","scene","activity"):
             await self.store.add_creation_inspiration({"id":kind,"source_kind":kind,"source_ref":"1",
                 "prompt_digest":kind,"score":0.9 if kind=="dream" else 0.5,
                 "created_at":NOW.timestamp(),"expires_at":NOW.timestamp()+3600})
         self.assertEqual([row["id"] for row in await self.store.active_opportunities(NOW.timestamp())],["scene"])
-        self.assertEqual([row["id"] for row in await self.store.pending_creation_inspirations(NOW.timestamp(),limit=1)],["scene"])
+        self.assertEqual([row["id"] for row in await self.store.pending_creation_inspirations(NOW.timestamp(),limit=1)],["activity"])
         self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM proactive_opportunities").fetchone()[0],2)
-        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM creation_inspirations").fetchone()[0],2)
+        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM creation_inspirations").fetchone()[0],4)
 
     async def test_scene_and_opportunities_roll_back_together(self):
         await self.store.save_scene("node","原场景",[])
@@ -128,74 +128,92 @@ class DailyLifeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.store.get_scene("node"))["scene"],"原场景")
         self.assertEqual(await self.store.active_opportunities(NOW.timestamp()),[])
 
-    async def test_fallback_schedule_keeps_daily_routines_and_identity(self):
+    async def test_fixed_windows_cover_the_day_without_personality_weather_or_model_generation(self):
         with patch.object(self.store,"get_state",side_effect=AssertionError("日程不再读取生理状态")):
             nodes=await self.service.ensure_day(NOW,"大学学生","晴天")
-        self.assertGreaterEqual(sum(node["kind"]=="meal" for node in nodes),2)
-        self.assertTrue(any(node["kind"]=="sleep" for node in nodes))
-        self.assertTrue(any(node["location"]=="学校" for node in nodes))
+        self.assertEqual(nodes[0]["start_minute"],0)
+        self.assertEqual(nodes[-1]["end_minute"],1440)
+        self.assertTrue(all(left["end_minute"]==right["start_minute"] for left,right in zip(nodes,nodes[1:])))
+        self.assertEqual({node["kind"] for node in nodes},{"sleep","leisure","study"})
+        self.assertTrue(all(node["location"]=="在线" and node["shareability"]==0 for node in nodes))
+        self.assertTrue(all(node["id"].startswith("task:") for node in nodes))
         self.assertTrue(all("energy_load" not in node for node in nodes))
         self.assertEqual(await self.service.ensure_day(NOW,"新身份","雨天"),nodes)
+        weekend=await self.service.ensure_day(NOW+timedelta(days=2),"职场人士","暴雨",
+            memory_context={"private_date_hints":[{"kind":"生日","days":1}]},environment={"holiday":"节日"})
+        keys=("start_minute","end_minute","kind","summary","location")
+        self.assertEqual([[node[key] for key in keys] for node in nodes],
+                         [[node[key] for key in keys] for node in weekend])
+        self.llm.task_available.assert_not_called()
         self.llm.generate_json.assert_not_awaited()
 
-    async def test_schedule_generation_ignores_legacy_factors_and_sanitizes_template(self):
-        raw=[{"start":"00:00","end":"08:00","kind":"sleep","summary":"睡觉"},
-             {"start":"08:00","end":"09:00","kind":"meal","summary":"吃早饭"},
-             {"start":"12:00","end":"13:00","kind":"meal","summary":"吃午饭"}]
-        for item in raw:item.update(energy_load=999,state_deltas={"hunger":-90})
-        self.llm.task_available.return_value=True
-        self.llm.generate_json.side_effect=None; self.llm.generate_json.return_value=raw
-        with patch.object(self.service,"_template",return_value={"workday":raw}):
-            nodes=await self.service.ensure_day(NOW,"普通网友","晴天",force=True)
-        self.assertEqual(len(nodes),3)
-        self.assertTrue(all("energy_load" not in node and "state_deltas" not in node for node in nodes))
-        prompt=self.llm.generate_json.await_args.args[0]
-        for term in ("energy_load","state_deltas","hunger","精力","饥饿"):self.assertNotIn(term,prompt)
-
-    async def test_invalid_schedule_generation_falls_back(self):
-        self.llm.task_available.return_value=True
-        self.llm.generate_json.side_effect=None; self.llm.generate_json.return_value=[{"start":"12:00","end":"13:00","kind":"work"}]
-        nodes=await self.service.ensure_day(NOW,"普通网友","晴天")
-        self.assertTrue(any(node["kind"]=="sleep" for node in nodes))
-        self.assertGreaterEqual(sum(node["kind"]=="meal" for node in nodes),2)
-
-    async def test_expand_scene_produces_daily_context_and_single_share_opportunity(self):
-        nodes=await self.service.ensure_day(NOW,"普通网友","晴天")
-        self.llm.generate_json.side_effect=None
-        self.llm.generate_json.return_value={"scene":"正在厨房洗菜，准备午饭。","opportunities":[{
-            "topic":"今天的午饭","motive":"想聊聊新菜谱","weight":0.6}]}
-        await self.service.expand_due(NOW,nodes,"晴天")
+    async def test_old_current_framework_is_migrated_without_using_its_generated_scene(self):
+        previous=(NOW-timedelta(days=1)).date().isoformat()
+        for day,node_id in ((DAY,"old-today"),(previous,"old-yesterday")):
+            await self.store.replace_framework(day,[{"id":node_id,"day":day,"start_minute":0,
+                "end_minute":1440,"kind":"meal","summary":"在厨房做饭","location":"厨房","shareability":0.5}])
+            await self.store.save_scene(node_id,"随机生成的厨房场景",[])
         context=await self.service.context(NOW)
-        self.assertEqual(context["current"]["kind"],"meal")
-        self.assertEqual(context["next"]["kind"],"nap")
-        self.assertEqual(context["scene"]["scene"],"正在厨房洗菜，准备午饭。")
+        self.assertEqual(context,{"nodes":[],"current":None,"next":None,"scene":{}})
+        nodes=await self.service.ensure_day(NOW)
+        self.assertTrue(all(node["id"].startswith("task:") for node in nodes))
+        self.assertEqual((await self.service.context(NOW))["scene"],{})
+        self.assertEqual(await self.store.get_scene("old-today"),{})
+        self.assertEqual((await self.store.get_scene("old-yesterday"))["scene"],"随机生成的厨房场景")
+        self.llm.generate_json.assert_not_awaited()
+
+    async def test_only_recorded_completed_activity_creates_a_scene(self):
+        nodes=await self.service.ensure_day(NOW,"普通网友","晴天")
+        context=await self.service.context(NOW)
+        self.assertEqual(context["scene"],{})
+        self.assertTrue(all(not row for row in (await self.store.get_scenes_by_framework_ids([node["id"] for node in nodes])).values()))
+        await self.service.record_activity(NOW,"已检索并保存2条新闻摘要")
+        await self.service.record_activity(NOW,"已检索并保存2条新闻摘要")
+        await self.service.record_activity(NOW,"已保存1篇主题检索笔记")
+        context=await self.service.context(NOW)
+        self.assertEqual(context["scene"]["scene"],"已检索并保存2条新闻摘要\n已保存1篇主题检索笔记")
         self.assertEqual(set(context["scene"]),{"framework_id","scene","created_at"})
-        self.assertEqual(len(await self.store.active_opportunities(NOW.timestamp())),1)
-        await self.service.expand_due(NOW,nodes,"晴天")
-        self.llm.generate_json.assert_awaited_once()
+        self.assertEqual(await self.store.get_scene(context["next"]["id"]),{})
+        self.assertEqual(await self.store.active_opportunities(NOW.timestamp()),[])
         scenes=await self.store.get_scenes_by_framework_ids([context["current"]["id"],"missing"])
         self.assertEqual(scenes[context["current"]["id"]],context["scene"])
         self.assertEqual(scenes["missing"],{})
         self.assertEqual((await self.store.scenes_for_day(DAY))[3]["scene"],context["scene"]["scene"])
-        await self.store.replace_framework(DAY,nodes)
+        self.llm.generate_json.assert_not_awaited()
+
+    async def test_force_keeps_completed_activity_and_does_not_rebuild_fixed_windows(self):
+        nodes=await self.service.ensure_day(NOW)
+        await self.service.record_activity(NOW,"已检索并保存2条新闻摘要")
+        before=await self.service.context(NOW)
+        with patch.object(self.store,"replace_framework",wraps=self.store.replace_framework) as replace:
+            self.assertEqual(await self.service.ensure_day(NOW,"新身份","雨天",force=True),nodes)
+            replace.assert_not_awaited()
+        self.assertEqual(await self.service.context(NOW),before)
+
+    async def test_standby_empty_summary_and_missing_framework_never_record_completion(self):
+        nodes=await self.service.ensure_day(NOW)
+        await self.service.record_activity(NOW.replace(hour=3),"夜间不应记录完成")
+        await self.service.record_activity(NOW.replace(hour=23,minute=45),"夜间不应记录完成")
+        await self.service.record_activity(NOW," \n ")
+        await self.service.record_activity(NOW+timedelta(days=1),"未安排活动不记录")
+        self.assertTrue(all(not row for row in (await self.store.get_scenes_by_framework_ids([node["id"] for node in nodes])).values()))
         self.assertEqual(await self.store.active_opportunities(NOW.timestamp()),[])
-        self.assertEqual(await self.store.get_scene(context["current"]["id"]),{})
 
-    async def test_scene_generation_failure_uses_plain_activity(self):
-        nodes=await self.service.ensure_day(NOW,"普通网友","晴天")
-        await self.service.expand_due(NOW,nodes,"晴天")
-        context=await self.service.context(NOW)
-        self.assertEqual(context["scene"]["scene"],context["current"]["summary"])
-
-    def test_validation_rejects_invalid_times_and_repairs_overlap(self):
-        self.assertEqual(self.service._validate(DAY,{}),[])
-        self.assertEqual(self.service._validate(DAY,[{"start":"25:00","end":"26:00","kind":"sleep"}]),[])
-        raw=[{"start":"00:00","end":"08:00","kind":"sleep"},
-             {"start":"07:00","end":"09:00","kind":"meal","shareability":"invalid"},
-             {"start":"12:00","end":"13:00","kind":"meal"}]
-        nodes=self.service._validate(DAY,raw)
-        self.assertEqual(nodes[1]["start_minute"],480)
-        self.assertEqual(nodes[1]["shareability"],0.3)
+    async def test_current_and_next_window_boundaries_and_time_helpers(self):
+        nodes=await self.service.ensure_day(NOW)
+        for index,node in enumerate(nodes):
+            with self.subTest(start=node["start_minute"]):
+                current,nxt=self.service.current_and_next(nodes,node["start_minute"])
+                self.assertEqual(current,node)
+                self.assertEqual(nxt,nodes[index+1] if index+1<len(nodes) else None)
+                self.assertEqual(self.service.current_and_next(nodes,node["end_minute"]-1)[0],node)
+        self.assertEqual(self.service.current_and_next(nodes,1440),(None,None))
+        for invalid in ("25:00","12:60","bad","24:00"):
+            self.assertIsNone(schedule.to_minute(invalid))
+        self.assertEqual(schedule.to_minute("24:00",allow_day_end=True),1440)
+        self.assertEqual(schedule.to_minute("08:30"),510)
+        self.assertEqual(schedule.hhmm(-1),"00:00")
+        self.assertEqual(schedule.hhmm(1440),"24:00")
 
 
 if __name__=="__main__":unittest.main()

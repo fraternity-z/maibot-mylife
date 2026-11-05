@@ -73,11 +73,6 @@ class LLMService:
             "fast": models.fast_task,
             "reasoning": models.reasoning_task,
             "creative": models.creative_task,
-            # 日程与场景细化是结构化 JSON 任务：默认走快模型。慢推理模型（如
-            # step-5-preview）生成一次要 27-30 秒，会撞穿 Host 的 30 秒 cap.call
-            # 超时；需要推理质量时用 schedule_task / scene_detail_task 显式覆盖。
-            "schedule": models.schedule_task or models.fast_task,
-            "scene_detail": models.scene_detail_task or models.fast_task,
             "continuity": models.continuity_task or models.fast_task,
             "diary": models.diary_task or models.creative_task,
             "date_analysis": models.date_analysis_task or models.fast_task,
@@ -94,14 +89,15 @@ class LLMService:
 
     def _active_task_kinds(self) -> set[str]:
         """只检查当前启用功能会实际调用的任务，fallback 不因此阻止插件启动。"""
-        kinds={"schedule","scene_detail"}
+        kinds:set[str]=set()
+        if self.config.reading.enabled:kinds.add("reading_annotation")
         if self.config.context.enabled and self.config.context.continuity_enabled:kinds.add("continuity")
         if self.config.memory.enabled:
             if self.config.memory.diary_enabled:kinds.add("diary")
             if self.config.memory.date_model_analysis_enabled:kinds.add("date_analysis")
         if self.config.network.enabled:
             if self.config.network.news_enabled:kinds.add("news")
-            if self.config.network.news_enabled:kinds.add("search")
+            if self.config.network.search_enabled:kinds.add("search")
             if self.config.network.association_enabled:kinds.add("relevance")
         # relay_summary 已并入群观察的单次 group_judgment 调用（v1.23.6），不再单列必查。
         if self.config.group.relay_enabled:kinds.add("group_judgment")

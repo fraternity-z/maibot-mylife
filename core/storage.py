@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 # 长期运行记录（互动、主动事件、契机、转述候选/事件、跳过统计）的保留天数。
 # 这些表没有过期字段驱动的外部清理，超期行必须在 cleanup_runtime_records 中删除，
 # 否则只会无限增长；pending 与在途行永远保留，避免打断正在结算的引用。
@@ -366,6 +366,15 @@ class LifeStore:
               title TEXT NOT NULL, summary TEXT NOT NULL, annotation TEXT NOT NULL,
               source_digest TEXT NOT NULL, created_at REAL NOT NULL,
               UNIQUE(source_api,external_id)
+            );
+            CREATE TABLE IF NOT EXISTS local_reading_progress(
+              source_digest TEXT PRIMARY KEY, source_path TEXT NOT NULL,
+              offset INTEGER NOT NULL, total_chars INTEGER NOT NULL, updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS local_reading_chunks(
+              note_id TEXT PRIMARY KEY, source_digest TEXT NOT NULL, source_path TEXT NOT NULL,
+              start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL,
+              total_chars INTEGER NOT NULL, excerpt TEXT NOT NULL, created_at REAL NOT NULL
             );
             -- 搜索 Key 只保存不可逆指纹和健康状态，调用事件与模型 Token 分开统计。
             CREATE TABLE IF NOT EXISTS search_key_runtime(
@@ -1238,7 +1247,8 @@ class LifeStore:
     async def pending_creation_inspirations(self, now: float, limit: int=10) -> list[dict[str, Any]]:
         async with self._lock:
             rows=self.conn.execute(
-                """SELECT * FROM creation_inspirations WHERE status='pending' AND expires_at>? AND source_kind!='dream'
+                """SELECT * FROM creation_inspirations WHERE status='pending' AND expires_at>?
+                AND source_kind NOT IN ('dream','life','scene')
                 ORDER BY score DESC,created_at DESC LIMIT ?""",(now,max(1,min(100,int(limit))))
             ).fetchall()
             return [dict(row) for row in rows]
@@ -1425,30 +1435,90 @@ class LifeStore:
         """外部阅读联动只接收有限文字摘要和生成批注，不接受二进制字段。"""
         async with self._lock:
             with self._tx() as conn:
-                cursor=conn.execute(
-                    """INSERT OR IGNORE INTO reading_notes
-                    (id,source_api,external_id,title,summary,annotation,source_digest,created_at)
+                return self._save_reading_note(conn,item)
+
+    @staticmethod
+    def _save_reading_note(conn: sqlite3.Connection, item: dict[str, Any]) -> bool:
+        cursor=conn.execute(
+            """INSERT OR IGNORE INTO reading_notes
+            (id,source_api,external_id,title,summary,annotation,source_digest,created_at)
+            VALUES(?,?,?,?,?,?,?,?)""",
+            (item["id"],item["source_api"][:160],item["external_id"][:200],item["title"][:160],
+             item["summary"][:3000],item["annotation"][:4000],item["source_digest"][:128],float(item["created_at"])),
+        )
+        if not cursor.rowcount:return False
+        document_id=f"reading:{item['id']}"; content=item["annotation"] or item["summary"]
+        conn.execute(
+            """INSERT INTO bookshelf_documents
+            (id,doc_type,work_type,title,privacy,status,current_revision,source_kind,source_ref,summary,
+             created_at,updated_at,archived_at)
+            VALUES(?,'reading_note','',?,'private','archived',1,'external_reading',?,?,?,?,?)""",
+            (document_id,item["title"][:160],item["external_id"][:200],item["summary"][:1000],
+             float(item["created_at"]),float(item["created_at"]),float(item["created_at"])),
+        )
+        conn.execute(
+            """INSERT INTO bookshelf_revisions
+            (document_id,revision_number,stage,content,model_task,created_at)
+            VALUES(?,1,'annotation',?,'reading_annotation',?)""",
+            (document_id,content[:10000],float(item["created_at"])),
+        )
+        return True
+
+    async def reading_progress(self, source_digest: str) -> int:
+        async with self._lock:
+            row=self.conn.execute("SELECT offset FROM local_reading_progress WHERE source_digest=?",(source_digest,)).fetchone()
+            return int(row[0]) if row else 0
+
+    async def reading_usage(self, start: float, end: float) -> dict[str, Any]:
+        async with self._lock:
+            row=self.conn.execute(
+                """SELECT COUNT(CASE WHEN created_at>=? AND created_at<? THEN 1 END) AS count,
+                COALESCE(MAX(created_at),0) AS last_read_at FROM local_reading_chunks""",(start,end),
+            ).fetchone()
+            return dict(row)
+
+    async def save_reading_chunk(self, item: dict[str, Any], *, source_path: str, start_offset: int,
+                                 end_offset: int, total_chars: int, excerpt: str, day_start: float,
+                                 day_end: float, daily_max: int, interval_seconds: float) -> str:
+        """在同一事务中保存实读正文、私人笔记与进度，并复核并发额度。"""
+        if not (0<=start_offset<end_offset<=total_chars and len(excerpt)==end_offset-start_offset):
+            raise ValueError("小说阅读范围与正文长度不一致")
+        if item["source_api"]!="local_novel" or not item["source_digest"]:
+            raise ValueError("小说阅读来源无效")
+        now=float(item["created_at"]); digest=item["source_digest"]
+        async with self._lock:
+            with self._tx() as conn:
+                row=conn.execute("SELECT offset FROM local_reading_progress WHERE source_digest=?",(digest,)).fetchone()
+                if (int(row[0]) if row else 0)!=start_offset:return "duplicate"
+                used=conn.execute("SELECT COUNT(*) FROM local_reading_chunks WHERE created_at>=? AND created_at<?",
+                                  (day_start,day_end)).fetchone()[0]
+                if used>=daily_max:return "daily_limit"
+                last=conn.execute("SELECT MAX(created_at) FROM local_reading_chunks").fetchone()[0]
+                if last is not None and now-float(last)<interval_seconds:return "interval"
+                if not self._save_reading_note(conn,item):return "duplicate"
+                conn.execute(
+                    """INSERT INTO local_reading_chunks
+                    (note_id,source_digest,source_path,start_offset,end_offset,total_chars,excerpt,created_at)
                     VALUES(?,?,?,?,?,?,?,?)""",
-                    (item["id"],item["source_api"][:160],item["external_id"][:200],item["title"][:160],
-                     item["summary"][:3000],item["annotation"][:4000],item["source_digest"][:128],float(item["created_at"])),
-                )
-                if not cursor.rowcount:return False
-                document_id=f"reading:{item['id']}"; content=item["annotation"] or item["summary"]
-                conn.execute(
-                    """INSERT INTO bookshelf_documents
-                    (id,doc_type,work_type,title,privacy,status,current_revision,source_kind,source_ref,summary,
-                     created_at,updated_at,archived_at)
-                    VALUES(?,'reading_note','',?,'private','archived',1,'external_reading',?,?,?,?,?)""",
-                    (document_id,item["title"][:160],item["external_id"][:200],item["summary"][:1000],
-                     float(item["created_at"]),float(item["created_at"]),float(item["created_at"])),
+                    (item["id"],digest,source_path,start_offset,end_offset,total_chars,excerpt,now),
                 )
                 conn.execute(
-                    """INSERT INTO bookshelf_revisions
-                    (document_id,revision_number,stage,content,model_task,created_at)
-                    VALUES(?,1,'annotation',?,'reading_annotation',?)""",
-                    (document_id,content[:10000],float(item["created_at"])),
+                    """INSERT INTO local_reading_progress(source_digest,source_path,offset,total_chars,updated_at)
+                    VALUES(?,?,?,?,?) ON CONFLICT(source_digest) DO UPDATE SET
+                    source_path=excluded.source_path,offset=excluded.offset,
+                    total_chars=excluded.total_chars,updated_at=excluded.updated_at""",
+                    (digest,source_path,end_offset,total_chars,now),
                 )
-                return True
+                return "read"
+
+    async def recent_local_reading_notes(self, limit: int=3) -> list[dict[str, Any]]:
+        async with self._lock:
+            rows=self.conn.execute(
+                """SELECT c.*,n.title,n.annotation FROM local_reading_chunks c
+                JOIN reading_notes n ON n.id=c.note_id ORDER BY c.created_at DESC,c.note_id LIMIT ?""",
+                (max(1,min(10,int(limit))),),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     async def cleanup_creation(self, now: float) -> None:
         async with self._lock:

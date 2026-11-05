@@ -31,7 +31,7 @@ COMMAND_SECTIONS:tuple[CommandSection,...]=(
     )),
     CommandSection("管理与诊断",(
         CommandItem("/麦麦立即创作","立即执行创作判断（管理员）"),
-        CommandItem("/麦麦重生日程","重新生成今日日程（管理员）"),
+        CommandItem("/麦麦重生日程","检查今日任务窗口，保留执行记录（管理员）"),
         CommandItem("/麦麦休息测试","时间与概率回复诊断（管理员）"),
     )),
 )

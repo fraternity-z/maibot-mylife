@@ -1,6 +1,7 @@
 """部署配置与消息边界的回归检查。"""
 from pathlib import Path
 import tomllib
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
@@ -70,6 +71,7 @@ def test_removed_simulation_settings_are_ignored_in_legacy_config(plugin_module)
         "recall":{"enabled":True},
         "memory":{"dream_probability":1,"dream_fragments_enabled":True},
         "models":{"dream_task":"old-dream-task"},
+        "schedule":{"generate_hour":3,"detail_lead_minutes":60,"template_file":"old.json"},
         "creation":{"minimum_energy":99},
         "proactive":{"minimum_energy":99},
     })
@@ -77,8 +79,25 @@ def test_removed_simulation_settings_are_ignored_in_legacy_config(plugin_module)
     assert "state" not in data and "recall" not in data
     assert not any(key.startswith("dream_") for key in data["memory"])
     assert "dream_task" not in data["models"]
+    assert "schedule" not in data
     assert "minimum_energy" not in data["creation"] and "minimum_energy" not in data["proactive"]
     assert data["memory"]["diary_enabled"] and data["memory"]["important_dates_enabled"]
+
+
+@pytest.mark.parametrize("fields",[{"chunk_chars":0},{"daily_max":-1},{"interval_minutes":0}])
+def test_reading_rejects_invalid_limits(plugin_module,fields):
+    with pytest.raises(ValidationError):plugin_module.MaiLifeSettings.model_validate({"reading":fields})
+
+
+def test_reading_does_not_require_creation_or_schedule_models(plugin_module):
+    settings=plugin_module.MaiLifeSettings.model_validate({"creation":{"enabled":False},
+        "models":{"schedule_task":"old","scene_detail_task":"old"}})
+    assert settings.reading.enabled and settings.reading.directory=="novels"
+    assert settings.reading.daily_max==4 and settings.reading.interval_minutes==60
+    assert "schedule_task" not in settings.models.model_dump()
+    service=plugin_module.LLMService(Mock(),settings,Mock())
+    assert "reading_annotation" in service._active_task_kinds()
+    assert not {"schedule","scene_detail"}.intersection(service._active_task_kinds())
 
 
 @pytest.mark.parametrize("info",[None,"invalid",{"additional_config":"invalid"}])

@@ -23,10 +23,11 @@ def plugin(plugin_module):
     instance.ctx=SimpleNamespace(logger=Mock())
     instance._get_logger=lambda:instance.ctx.logger
     for name in ("_store","_llm","_schedule","_proactive","_continuity","_memory",
-                 "_information","_group_observer","_relay","_bookshelf","_creation","_admin"):
+                 "_information","_reading","_group_observer","_relay","_bookshelf","_creation","_admin"):
         setattr(instance,name,AsyncMock())
     instance._store.get_user.return_value=None
     instance._store.proactive_for_task.return_value={}
+    instance._reading.context_for_user.return_value={"items":[]}
     instance._env=Mock(now=Mock(return_value=NOW))
     instance._rest=plugin_module.RestGate(instance.config)
     instance._activate_planner_task=AsyncMock(return_value=None)
@@ -275,7 +276,7 @@ def test_config_reload_retains_group_reply_origin_and_applies_new_hours(plugin):
     plugin._maintenance_tick=AsyncMock()
     plugin._start_tasks=Mock()
     plugin._resolve_all_streams=AsyncMock()
-    for name in ("_llm","_schedule","_proactive","_continuity","_memory","_information",
+    for name in ("_llm","_schedule","_proactive","_continuity","_memory","_information","_reading",
                  "_group_observer","_relay","_bookshelf","_creation","_admin"):
         getattr(plugin,name).update_config=Mock()
     message=inbound(group=True)
@@ -319,7 +320,8 @@ def test_maintenance_updates_only_daily_activity_and_keeps_memory(plugin,kind):
     plugin._store.save_state.assert_awaited_once_with({
         "current_activity":"记录今天的小事","current_location":"家里","last_updated_at":NOW.timestamp(),
     })
-    plugin._schedule.expand_due.assert_awaited_once_with(NOW,[],plugin._env.weather_text.return_value)
+    plugin._schedule.ensure_day.assert_awaited_once_with(NOW)
+    plugin._schedule.expand_due.assert_not_awaited()
     plugin._memory.ensure_daily.assert_awaited_once_with(NOW)
     plugin._settle_relationships.assert_awaited_once_with(NOW)
 
@@ -357,7 +359,8 @@ def test_planner_and_replyer_inject_daily_context(plugin):
     plugin._store.get_state.return_value={"current_activity":"整理读书笔记","current_location":"家里"}
     plugin._store.get_weather.return_value={"description":"晴"}
     plugin._store.get_continuity.return_value={}
-    plugin._schedule.context.return_value={"current":{"summary":"看书","kind":"leisure"}}
+    plugin._schedule.context.return_value={"current":{"id":"task:reading","summary":"阅读小说","kind":"study","location":"在线"},
+                                          "scene":{"scene":"已阅读小说片段并整理读书笔记"}}
     plugin._memory.context_for_user.return_value={}
     plugin._information.context.return_value={}
     plugin._bookshelf.context_for_user.return_value={}
@@ -373,7 +376,8 @@ def test_planner_and_replyer_inject_daily_context(plugin):
     for result in asyncio.run(flow()):
         context=str(result["modified_kwargs"])
         assert "整理读书笔记" in context
-        assert "家里" in context
+        assert "旧场景不代表完成" in context
+        assert "在线" in context
         assert all(term not in context for term in ("精力","饥饿","睡眠阶段","休息期间未回应","梦境余韵"))
 
 

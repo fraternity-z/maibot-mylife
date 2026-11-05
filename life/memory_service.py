@@ -3,14 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 import re
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
-# 离线补日记：向前寻找最早有框架日最多查 14 天，补算窗口上限 7 天。
-_BACKFILL_SCAN_DAYS=14
+# 仅回顾最近 7 天已经执行并记录的活动，不补造离线经历。
 _BACKFILL_MAX_DAYS=7
 
 
@@ -27,8 +24,6 @@ class MemoryService:
     def __init__(self,store:Any,config:Any,llm:Any,logger:Any,bot_name:str="麦麦")->None:
         self.store=store; self.config=config; self.llm=llm; self.logger=logger
         self.bot_name=bot_name
-        # 跳过补日记的 info 日志限流状态：(时间戳, 原因签名)，同因 24 小时内只记一条。
-        self._last_skip_log:tuple[float,str]|None=None
 
     def update_config(self,config:Any)->None:self.config=config
 
@@ -162,68 +157,41 @@ class MemoryService:
                 now.timestamp()-int(cfg.date_candidate_retention_days)*86400
             )
 
-    def _log_skip(self,now:datetime,signature:str,message:str)->None:
-        """跳过补日记的 info 按签名限流：同因 24 小时内最多一条，10 分钟一 tick 不再刷屏。"""
-        last=self._last_skip_log
-        if last and last[1]==signature and now.timestamp()-last[0]<86400:return
-        self._last_skip_log=(now.timestamp(),signature)
-        self.logger.info(message)
-
     async def _backfill_diaries(self,now:datetime)->None:
-        """补算 [最早有框架日的次日, 昨天] 内缺日记的日子，窗口上限 7 天。
-
-        离线多日时中间日没有落库框架，先用本地骨架补框架再生成日记；
-        向前 14 天都找不到任何框架（全新库）时保持 F1 守卫：一天都不补。
-        """
-        target=now.date()-timedelta(days=1)
-        anchor:date|None=None
-        for offset in range(_BACKFILL_SCAN_DAYS):
-            day=target-timedelta(days=offset)
-            if await self.store.get_framework(day.isoformat()):anchor=day; break
-        if anchor is None:
-            # 插件运行着的每一天凌晨都会生成 daily_framework；窗口内无框架说明当天根本没运行
-            # （如新装首跑），此时补日记只会得到一篇描述从未观测过的一天的幻觉日记。
-            self._log_skip(now,"no_framework",f"[MaiLife] 昨日无生活记录（当日未运行），跳过补日记 day={target.isoformat()}")
-            return
-        # 窗口 [anchor+1, target]：offset 0..N-1 即 target 到 anchor 次日，排序后取最近 7 天。
-        days=sorted(target-timedelta(days=offset) for offset in range(0,(target-anchor).days))[-_BACKFILL_MAX_DAYS:]
-        if target not in days:days.append(target)  # 昨日有框架（正常运行路径）照旧补
-        for day in days:
+        """只为最近 7 天已有执行记录的日期补日记，停机日期保持空缺。"""
+        for offset in range(_BACKFILL_MAX_DAYS,0,-1):
+            day=now.date()-timedelta(days=offset)
             if await self.store.get_diary(day.isoformat()):continue
-            if not await self.store.get_framework(day.isoformat()):
-                # MemoryService 不持有 ScheduleService，按需构造；只用本地 _fallback 兜底骨架。
-                from .schedule_service import ScheduleService
-                schedule=ScheduleService(self.store,self.config,self.llm,
-                                         str(Path(__file__).resolve().parents[1]),self.logger)
-                await self.store.replace_framework(day.isoformat(),
-                                                   schedule._fallback(day.isoformat(),day.weekday()>=5))
             await self._generate_diary(now,day)
 
     async def _generate_diary(self,now:datetime,target:date)->None:
-        """仅聚合麦麦自身场景和匿名互动计数，生成不含聊天原句的日记。"""
+        """仅聚合实际执行记录和匿名互动计数，生成不含聊天原句的日记。"""
         day=target.isoformat(); start,end=self._day_bounds(now,target)
-        scenes=await self.store.scenes_for_day(day)
+        nodes=[item for item in await self.store.get_framework(day) if str(item.get("id") or "").startswith("task:")]
+        scenes=await self.store.get_scenes_by_framework_ids([item["id"] for item in nodes]) if nodes else {}
+        life=[{"kind":item.get("kind"),"summary":str(scenes[item["id"]]["scene"]),
+               "location":item.get("location")} for item in nodes
+              if str(scenes.get(item["id"],{}).get("scene") or "").strip()]
+        if not life:return
         interactions=await self.store.interaction_counts(start,end)
         total_interactions=sum(int(item.get("count") or 0) for item in interactions)
         active_users=len({str(item.get("user_id") or "") for item in interactions if item.get("user_id")})
-        life=[{"kind":item.get("kind"),"summary":item.get("summary"),"location":item.get("location"),
-               "scene":item.get("scene") or ""} for item in scenes]
         # 输入模型的互动信息只有总量和人数，避免日记成为另一份私聊记录。
         source={"day":day,"life":life,
                 "interaction_counts":{"total":total_interactions,"active_people":active_users}}
         serialized=json.dumps(source,ensure_ascii=False,sort_keys=True); digest=hashlib.sha256(serialized.encode()).hexdigest()
         summaries=[str(item.get("summary") or "") for item in life if item.get("summary")]
-        # 无模型时标题也从池中取，避免每天的日记标题逐字相同（占位内容也应有变化）。
-        title=random.choice(["普通的一天","平静的一天","如常的一天","寻常的一天","安静的一天"])
-        fallback={"title":title,"content":(
-            "今天按自己的节奏过完了一天。"+("大致做了"+"、".join(summaries[:5])+"。" if summaries else "没有留下特别具体的安排。")+
-            (f"和熟悉的网友有过一些交流，共收到{total_interactions}条互动。" if total_interactions else "今天的聊天不多，安静也有安静的感觉。")
-        ),"mood_summary":"平稳地收下了这一天"}
+        fallback={"title":f"{day} 活动记录","content":(
+            "今天记录的实际活动："+"；".join(summaries[:5])+"。"+
+            f"共收到{total_interactions}条互动。"
+        ),"mood_summary":"按实际记录整理"}
         result=fallback
         if self.llm.task_available("diary"):
             prompt=(
-                f"根据以下{self.bot_name}自己的生活数据写一篇第一人称抽象日记。不得补写聊天原句、用户姓名、群名、账号、密码或朋友隐私。"
-                "互动数据只有数量，不能猜测聊天内容。返回JSON：title、content、mood_summary。\n"+serialized
+                f"根据以下{self.bot_name}已经执行并记录的活动写一篇第一人称日记。只能总结提供的执行结果，"
+                "不得把计划或旧场景当事实，不得虚构吃饭、出行、梦境、未读小说、新闻内容或学习成果。"
+                "不得补写聊天原句、用户姓名、群名、账号、密码或朋友隐私；互动数据只有数量，不能猜测聊天内容。"
+                "返回JSON：title、content、mood_summary。\n"+serialized
             )
             raw=await self.llm.generate_json(
                 prompt,"你写克制、自然的私人日记，只输出合法JSON。",fallback,max_tokens=0,

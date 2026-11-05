@@ -581,7 +581,7 @@
 
       <div class="ml-hero-meta-grid">
         <div class="ml-meta-box">
-          <div class="ml-meta-label">当前位置</div>
+          <div class="ml-meta-label">任务环境</div>
           <div class="ml-meta-val" id="hero-location">—</div>
         </div>
         <div class="ml-meta-box">
@@ -589,11 +589,11 @@
           <div class="ml-meta-val" id="hero-weather">—</div>
         </div>
         <div class="ml-meta-box">
-          <div class="ml-meta-label">当前日程段</div>
+          <div class="ml-meta-label">当前任务时段</div>
           <div class="ml-meta-val" id="hero-cur-node">—</div>
         </div>
         <div class="ml-meta-box">
-          <div class="ml-meta-label">下一日程预告</div>
+          <div class="ml-meta-label">下一待办计划</div>
           <div class="ml-meta-val" id="hero-next-node">—</div>
         </div>
       </div>
@@ -602,13 +602,13 @@
     <div class="ml-card ml-scene-box">
       <div>
         <div class="ml-card-header">
-          <h2 class="ml-card-title">临场微场景手账 (Scene Narrative)</h2>
+          <h2 class="ml-card-title">实际活动执行记录</h2>
           <span class="ml-badge" id="scene-status-badge">等待读取</span>
         </div>
-        <div class="ml-scene-quote" id="scene-text">正在从日程引擎读取当前细化场景…</div>
+        <div class="ml-scene-quote" id="scene-text">正在读取当前时段的执行结果…</div>
       </div>
       <div class="ml-scene-footer">
-        <span id="scene-narrative-note">规则层定界 · LLM 叙事细化</span>
+        <span id="scene-narrative-note">仅记录实际执行结果 · 待办计划不代表完成</span>
         <button type="button" class="ml-btn" id="btn-jump-memories" style="padding:4px 10px;font-size:12px;">翻看近期日记 →</button>
       </div>
     </div>
@@ -618,7 +618,7 @@
   <section class="ml-card ml-Section-gap">
     <div class="ml-card-header">
       <div>
-        <h2 class="ml-card-title" id="sched-title">今日生活框架与微场景时间线</h2>
+        <h2 class="ml-card-title" id="sched-title">今日任务时段与执行记录</h2>
       </div>
       <div class="ml-seg-group">
         <button type="button" class="ml-seg-btn active" id="btn-sched-today">今日日程</button>
@@ -819,7 +819,7 @@
     document.getElementById('hdr-version').textContent = `v${d.version || '—'}`;
     document.getElementById('hdr-generated').textContent = `采样于 ${(d.generated_at || '').replace('T', ' ')}`;
     document.getElementById('hero-botname').textContent = d.bot_name || '麦麦';
-    document.getElementById('hero-activity').textContent = st.current_activity ? `正在：${st.current_activity}` : '当前无特定活动';
+    document.getElementById('hero-activity').textContent = st.current_activity || '当前无执行记录';
     document.getElementById('hero-location').textContent = st.current_location || '未标记地点';
 
     const weatherParts = [d.weather || '天气未知', d.day_type || '', d.upcoming_festival ? `临近${d.upcoming_festival}` : ''].filter(Boolean);
@@ -828,7 +828,7 @@
     const curNode = sc.current || {};
     document.getElementById('hero-cur-node').textContent = curNode.summary
       ? `[${curNode.kind_zh || '日程'}] ${curNode.summary} (${curNode.window || ''})`
-      : '当前无匹配框架节点';
+      : '当前无匹配任务时段';
 
     const nxtNode = sc.next || {};
     document.getElementById('hero-next-node').textContent = nxtNode.summary
@@ -848,9 +848,9 @@
     const sceneObj = sc.scene || {};
     const hasScene = Boolean((sceneObj.scene || '').trim());
     const sceneBadge = document.getElementById('scene-status-badge');
-    sceneBadge.textContent = hasScene ? '场景已细化' : '等待细化';
+    sceneBadge.textContent = hasScene ? '已有执行记录' : '尚无执行记录';
     sceneBadge.className = `ml-badge ${hasScene ? 'ml-badge-good' : ''}`;
-    document.getElementById('scene-text').textContent = sceneObj.scene || st.current_activity || '（当前时段暂无细化微场景描述）';
+    document.getElementById('scene-text').textContent = sceneObj.scene || '当前时段尚无成功执行记录；计划不代表任务已完成。';
 
     const narEl = document.getElementById('scene-narrative-note');
     if (sv.narrative_note) {
@@ -885,14 +885,14 @@
     const curEnd = sc.current?.end || '';
 
     document.getElementById('sched-title').textContent =
-      `${isToday ? '今日生活框架与微场景时间线' : '明日生活框架预览'} (${dayStr || '—'})`;
+      `${isToday ? '今日任务时段与执行记录' : '明日任务计划预览'} (${dayStr || '—'})`;
 
     const ganttEl = document.getElementById('sched-gantt-track');
     const gridEl = document.getElementById('sched-nodes-grid');
 
     if (!nodes.length) {
       ganttEl.innerHTML = '';
-      gridEl.innerHTML = `<div class="ml-empty">${isToday ? '今日暂无日程节点' : '明日日程尚未生成（通常在凌晨自动生成）'}</div>`;
+      gridEl.innerHTML = `<div class="ml-empty">${isToday ? '今日暂无任务时段' : '明日任务计划尚未建立（切换日期后自动维护）'}</div>`;
       return;
     }
 
