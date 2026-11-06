@@ -1,4 +1,4 @@
-"""Mai_mylife v1.1.0 插件入口。"""
+"""Mai_mylife v1.2.0 插件入口。"""
 from __future__ import annotations
 
 from datetime import date,datetime,timedelta,timezone

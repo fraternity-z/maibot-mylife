@@ -17,7 +17,7 @@ def periodic(plugin_module,tmp_path):
     storage=importlib.import_module("mai_integration_tests.core.storage")
     config=plugin_module.MaiLifeSettings.model_validate({
         "proactive":{"patrol_interval_minutes":10},
-        "users":{"profiles":[{"user_id":"123","daily_proactive_unlimited":True}]},
+        "users":{"profiles":[{"user_id":"123","proactive_enabled":True,"daily_proactive_unlimited":True}]},
     })
     store=storage.LifeStore(str(tmp_path),clock=lambda:NOW.timestamp())
 
@@ -109,7 +109,8 @@ def test_actual_send_and_planner_judgment_use_the_same_interval(periodic):
 
 
 def test_multiple_users_take_turns_instead_of_the_same_user_repeatedly(periodic):
-    profile=type(periodic.config.users.profiles[0])(user_id="456",daily_proactive_unlimited=True)
+    profile=type(periodic.config.users.profiles[0])(
+        user_id="456",proactive_enabled=True,daily_proactive_unlimited=True)
     periodic.config.users.profiles.append(profile)
     asyncio.run(periodic.store.sync_users(periodic.config.users.profiles))
     asyncio.run(periodic.store.set_user_stream("456","private-456"))

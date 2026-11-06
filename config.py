@@ -12,7 +12,7 @@ import re
 from maibot_sdk import Field, PluginConfigBase
 from pydantic import TypeAdapter, field_validator, model_validator
 
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 CONFIG_SCHEMA_VERSION = "1.17.0"
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
@@ -166,7 +166,7 @@ class UserProfile(PluginConfigBase):
         ),
     )
     proactive_enabled: bool = Field(
-        default=True,
+        default=False,
         description="是否允许麦麦向该用户主动发起私聊。",
         json_schema_extra=_ui(
             "允许主动私聊", "关闭后仍可正常被动聊天，但麦麦不会主动找这个用户。", 2,

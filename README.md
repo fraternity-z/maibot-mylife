@@ -2,7 +2,7 @@
 
 `Mai_mylife` 让同一个麦麦实际阅读新闻、阅读小说、保存笔记和日记，并维护面向不同 QQ 用户的独立关系；同时支持群聊观察与转述。
 
-当前版本 **1.1.0** · 插件 ID：`fraternity-z.mai-mylife` · [下载 Release](https://github.com/fraternity-z/maibot-mylife/releases/latest) · [更新日志](CHANGELOG.md) · [问题反馈](https://github.com/fraternity-z/maibot-mylife/issues)
+当前版本 **1.2.0** · 插件 ID：`fraternity-z.mai-mylife` · [下载 Release](https://github.com/fraternity-z/maibot-mylife/releases/latest) · [更新日志](CHANGELOG.md) · [问题反馈](https://github.com/fraternity-z/maibot-mylife/issues)
 
 日常使用固定任务时段，执行成功后才记录活动，不再用模型编造吃饭、出行、场景或梦境。Planner 可自主判断是否主动聊天，继续遵守用户额度、判断间隔、工作时段与免打扰。
 
@@ -21,7 +21,7 @@
 
 ### 安装与更新
 
-从 [Releases](https://github.com/fraternity-z/maibot-mylife/releases) 下载 `mai-mylife-1.1.0.zip`。首次安装：进入 MaiBot WebUI 的“插件扩展”→“更多操作”→“从 ZIP 安装插件”，选择 ZIP；按界面提示重启或重载，然后启用“麦日常”并完成下方配置。当前宿主 ZIP 安装器不会覆盖已安装的相同插件 ID。
+从 [Releases](https://github.com/fraternity-z/maibot-mylife/releases) 下载 `mai-mylife-1.2.0.zip`。首次安装：进入 MaiBot WebUI 的“插件扩展”→“更多操作”→“从 ZIP 安装插件”，选择 ZIP；按界面提示重启或重载，然后启用“麦日常”并完成下方配置。当前宿主 ZIP 安装器不会覆盖已安装的相同插件 ID。
 
 也可手动安装：将 ZIP 内容直接解压到 `MaiBot/plugins/fraternity-z_mai-mylife/`，确保该目录直接包含 `_manifest.json` 和 `plugin.py`，不要再套一层目录。
 
@@ -37,14 +37,14 @@
 python tools/build_plugin.py
 ```
 
-生成 `dist/mai-mylife-1.1.0.zip`，文件名随 `_manifest.json` 的版本号变化。脚本读取当前工作树，包含尚未提交的运行代码，排除真实 `config.toml`、数据库、日志、个人日程模板、Git 和代码索引缓存。打包前会检查入口、页面、图标、Python 语法和版本一致性；不要直接压缩整个开发目录。
+生成 `dist/mai-mylife-1.2.0.zip`，文件名随 `_manifest.json` 的版本号变化。脚本读取当前工作树，包含尚未提交的运行代码，排除真实 `config.toml`、数据库、日志、个人日程模板、Git 和代码索引缓存。打包前会检查入口、页面、图标、Python 语法和版本一致性；不要直接压缩整个开发目录。
 
 ## 发布到官方插件中心
 
 官方市场通过公开 GitHub 仓库和 Release 收录插件。ZIP 用于本地安装或 Release 附件，收录申请填写仓库地址，不上传 ZIP 到索引仓库。
 
 1. 使用公开仓库 [fraternity-z/maibot-mylife](https://github.com/fraternity-z/maibot-mylife)，提交并推送待发布源码。运行配置、数据库和个人日程模板不应进入仓库或发布包。
-2. 在真实 MaiBot 中完成加载、私聊、群聊和 WebUI 验证，再到仓库 Releases 创建 `v1.1.0`（或 `1.1.0`）的 Release。Tag 对应提交中的 `_manifest.json.version` 必须为 `1.1.0`；只推 Tag 或保存草稿不满足收录要求。可附加本地 ZIP，也可以使用 GitHub 自动生成的源码包。尚在测试的版本可勾选 Prerelease。
+2. 在真实 MaiBot 中完成加载、私聊、群聊和 WebUI 验证，再到仓库 Releases 创建 `v1.2.0`（或 `1.2.0`）的 Release。Tag 对应提交中的 `_manifest.json.version` 必须为 `1.2.0`；只推 Tag 或保存草稿不满足收录要求。可附加本地 ZIP，也可以使用 GitHub 自动生成的源码包。尚在测试的版本可勾选 Prerelease。
 3. 打开官方索引仓库的[添加插件申请](https://github.com/Mai-with-u/plugin-repo/issues/new?template=add-plugin.yml)，填写：
    - 插件 ID：`fraternity-z.mai-mylife`
    - 仓库地址：`https://github.com/fraternity-z/maibot-mylife`

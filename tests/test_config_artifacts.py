@@ -15,6 +15,8 @@ def test_shipped_template_loads_with_current_schema(plugin_module):
     data=tomllib.loads((Path(__file__).parents[1]/"config.toml.example").read_text(encoding="utf-8"))
     settings=plugin_module.MaiLifeSettings.model_validate(data)
     assert settings.plugin.config_version=="1.17.0"
+    assert settings.users.profiles[0].proactive_enabled is False
+    assert type(settings.users.profiles[0])(user_id="123").proactive_enabled is False
     assert settings.users.profiles[0].daily_proactive_unlimited is False
     assert settings.users.profiles[0].daily_proactive_max==1
     assert settings.proactive.patrol_interval_minutes==180

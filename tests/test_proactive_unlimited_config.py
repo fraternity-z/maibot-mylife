@@ -13,6 +13,30 @@ def modules(plugin_module):
             importlib.import_module("mai_integration_tests.core.storage"))
 
 
+@pytest.mark.parametrize("fields,expected",[
+    ({},False),({"proactive_enabled":True},True),({"proactive_enabled":False},False),
+])
+def test_proactive_opt_in_survives_reload_and_filters_candidates(modules,tmp_path,fields,expected):
+    config,storage=modules
+    profile=config.UserProfile(user_id="123",enabled=True,**fields)
+    reloaded=config.UserProfile.model_validate(profile.model_dump())
+    assert reloaded.proactive_enabled is expected
+
+    async def check():
+        store=storage.LifeStore(str(tmp_path))
+        try:
+            await store.initialize()
+            await store.sync_users([reloaded])
+            await store.close()
+            await store.initialize()
+            assert bool((await store.get_user("123"))["proactive_enabled"]) is expected
+            assert [user["user_id"] for user in await store.list_users(proactive_only=True)]==(
+                ["123"] if expected else [])
+        finally:await store.close()
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize("role,limit,expected",[("friend",-1,1),("owner",-1,2),("friend",0,0),("owner",20,20)])
 def test_existing_limits_keep_their_meaning(modules,role,limit,expected):
     config,_=modules
